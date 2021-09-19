@@ -1265,6 +1265,10 @@ def fix_function_noret_flags():
                 logger.debug(f"  found a prologue with no xrefs after call @ {call.ea:#x} -> stepping back")
                 continue
 
+            # if we're followed by a byte with no value this definitely is a noret function
+            if not idaapi.is_loaded(after_ret.ea):
+                return False
+
             # if we're followed by data, this definitely is a noret function
             if is_data_heuristic(after_ret):
                 return False
