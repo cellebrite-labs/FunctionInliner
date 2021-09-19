@@ -760,6 +760,7 @@ def inline_all_functions():
 
     inlined = 0
     skipped = 0
+    erroronous = 0
     kp_asm = keypatch.Keypatch_Asm()
 
     all_funcs = list(sark.functions())
@@ -795,10 +796,20 @@ def inline_all_functions():
                 inlined += 1
             except FunctionInlinerUnsupportedException:
                 skipped += 1  # skip functions that we can't inline
+            except Exception:
+                logger.exception(f"unhandled exception raised when trying to inline {func.name}:")
+                erroronous += 1
 
         elapsed_time = int(time.time() - start_time)
 
-    logger.info(f"inlined a total of {inlined} functions in {elapsed_time} seconds. skipped {skipped} unsupported functions")
+    logger.info(f"inlined a total of {inlined} functions in {elapsed_time} seconds")
+
+    if skipped:
+        logger.warning(f"skipped {skipped} unsupported functions")
+
+    if erroronous:
+        logger.error(f"failed inlining {erroronous} functions")
+
     return retval
 
 
