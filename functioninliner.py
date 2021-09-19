@@ -1746,8 +1746,8 @@ def get_op_regs(op):
             assert m
             start, end = m.groups()
             return set((f"Q{n}" for n in range(int(start), int(end) + 1)))
-    # some times (e.g. register with optional shift), Sark can't the register properly
-    elif op.type.is_special and op.reg_id > 0:
+    # some times (e.g. register with optional shift), Sark can't parse the register properly
+    elif op.type.is_special and any(t in op.text for t in (',ASR#', ',LSL#', ',LSR#', ',ROR#')):
         reg = sark.base.get_register_name(op.reg_id)
         return set((reg,))
     else:
