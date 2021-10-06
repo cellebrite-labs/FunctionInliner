@@ -758,6 +758,7 @@ def inline_function(func, kp_asm=None):
 def inline_all_functions():
     logger.info("inlining all outlined functions...")
 
+    failed_analysis = 0
     inlined = 0
     skipped = 0
     erroronous = 0
@@ -774,10 +775,16 @@ def inline_all_functions():
                 return False
 
             logger.debug(f"analyzing {func.name}")
-            if is_function_outlined(func):
-                outlined_funcs.append(func)
+            try:
+                if is_function_outlined(func):
+                    outlined_funcs.append(func)
+            except Exception:
+                logger.exception(f"unhandled exception raised when trying to analyze {func.name}:")
+                failed_analysis += 1
 
     logger.info(f"found {len(outlined_funcs)} outlined functions")
+    if failed_analysis:
+        logger.error(f"failed analysing {failed_analysis} functions")
 
     retval = True
     with wait_box("inlining all outlined functions... (this may take a few minutes)"):
