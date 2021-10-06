@@ -2168,7 +2168,7 @@ def patch_constant_BRs(kp_asm=None):
         # patch to a standard call
         call_mnem = l3.insn.mnem[:-1]
         asm = f"{call_mnem} #{target_ea:#x}"  # we drop PAC flags
-        code = bytes(kp_asm.assemble(asm, l3.ea)[0])
+        code = bytes(kp_asm.assemble(asm, l1.ea)[0])
         apply_code_patch(l1.ea, l3.end_ea, code, kp_asm)
 
         add_comment(l1, f"FunctionInliner: patched from constant BR using {r}")
@@ -2245,7 +2245,7 @@ def patch_constant_tested_BRs(kp_asm=None):
         # patch to a standard call
         call_mnem = l5.insn.mnem[:-1]
         asm = f"{call_mnem} #{target_ea:#x}"  # we drop PAC flags
-        code = bytes(kp_asm.assemble(asm, l5.ea)[0])
+        code = bytes(kp_asm.assemble(asm, l1.ea)[0])
         apply_code_patch(l1.ea, l5.end_ea, code, kp_asm)
 
         add_comment(l1, f"FunctionInliner: patched from constant tested BR using {r}")
