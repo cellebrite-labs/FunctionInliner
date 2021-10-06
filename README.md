@@ -198,6 +198,20 @@ Some other stuff:
 The plugin currently works only on ARM64 binaries that conform to
 [the ABI](https://developer.arm.com/documentation/ihi0055/d?lang=en).
 
+## Fixing corrupted state
+
+If for any reason (e.g. IDA crashed in the middle of function inlining) the IDB has gotten into
+corrupted state with regards to FunctionInliner, where for example:
+1. You have deleted but not disabled addresses that were once inlined clones.
+2. You have inlined clones with unpatched source calls.
+3. You have patched source calls with missing clones.
+4. FunctionInliner thinks it has already inlined (or undid inlining of) something which it hasn't.
+
+You should run the `fix_state.py` script in the context of the corrupted IDB.
+
+In our testing, this happened once after months of heavy usage, and we suspect another conflicting
+plugin to cause this, so we didn't bother integrating the fixing logic into the plugin.
+
 ## Meta
 
 Authored by Tomer Harpaz of Cellebrite Security Research Labs.
