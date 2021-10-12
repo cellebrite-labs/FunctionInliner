@@ -2126,7 +2126,7 @@ def apply_code_patch(start_ea, end_ea, code, kp_asm=None):
 def patch_constant_BRs(kp_asm=None):
     """patches snippets of the form:
                 ADR/L     Xn, sub_1337
-                NOP
+                NOP/-
                 BR/BLR    Xn
 
         to:
@@ -2144,9 +2144,16 @@ def patch_constant_BRs(kp_asm=None):
 
         # check if we're at a constant BR
         try:
-            if (l1.insn.mnem not in ("ADR", "ADRL")
-               or l2.insn.mnem != "NOP"  # noqa: W503
-               or l3.insn.mnem not in ("BR", "BLR")):  # noqa: W503
+            if l1.insn.mnem not in ("ADR", "ADRL"):
+                continue
+
+            if l1.insn.mnem == "ADR":
+                if l2.insn.mnem != "NOP":
+                    continue
+            else:  # ADRL spans 8 bytes and hence no NOP
+                l3 = l2  # align both cases' line numbers
+
+            if l3.insn.mnem not in ("BR", "BLR"):
                 continue
         except sark.exceptions.SarkNoInstruction:
             continue
@@ -2183,7 +2190,7 @@ def patch_constant_BRs(kp_asm=None):
 def patch_constant_tested_BRs(kp_asm=None):
     """patches snippets of the form:
                 ADR/L     Xn, sub_1337
-                NOP
+                NOP/-
                 CBNZ      Xn, do_call
                 B         dont_call
             do_call:
@@ -2205,9 +2212,14 @@ def patch_constant_tested_BRs(kp_asm=None):
 
         # check if we're at a constant BR
         try:
-            if (l1.insn.mnem not in ("ADR", "ADRL")
-               or l2.insn.mnem != "NOP"):  # noqa: W503
+            if l1.insn.mnem not in ("ADR", "ADRL"):
                 continue
+
+            if l1.insn.mnem == "ADR":
+                if l2.insn.mnem != "NOP":
+                    continue
+            else:  # ADRL spans 8 bytes and hence no NOP
+                l3, l4, l5 = l2, l3, l4  # align both cases' line numbers
 
             target_ea = l1.insn.operands[1].value
             r = l1.insn.operands[0].text
@@ -2254,6 +2266,88 @@ def patch_constant_tested_BRs(kp_asm=None):
         count += 1
 
     logger.info(f"patched {count} constant tested BRs")
+    return retval
+
+
+def patch_constant_data_BLRs(kp_asm=None):
+    """patches snippets of the form:
+                NOP/ADRP
+                LDR       Xn, =sub_1337
+                BLR       Xn
+
+        where the data lives in a const segment
+
+        to:
+                BL      sub_1337
+    """
+    if kp_asm is None:
+        kp_asm = keypatch.Keypatch_Asm()
+
+    count = 0
+    retval = True
+    for l1, l2, l3 in linegroups(3):
+        if idaapi.user_cancelled():
+            retval = False
+            break
+
+        # check if we're at a constant BR
+        try:
+            if l2.insn.mnem != "LDR":
+                continue
+
+            if l1.insn.mnem == "NOP":
+                if not l2.insn.operands[1].type.is_mem:
+                    continue
+            elif l1.insn.mnem == "ADRP":
+                if not l2.insn.operands[1].type.is_displ:
+                    continue
+                if not l2.insn.operands[1].reg == l1.insn.operands[0].reg:
+                    continue
+            else:
+                continue
+
+            r = l2.insn.operands[0].reg
+
+            if l3.insn.mnem != "BLR" or l3.insn.operands[0].reg != r:
+                continue
+        except sark.exceptions.SarkNoInstruction:
+            continue
+
+        # resolve the loaded addr
+        drefs_from = set(l2.drefs_from)
+        if len(drefs_from) == 1:
+            p_target_ea = drefs_from.pop()
+        else:  # this may happen with LDR when the target contains another address
+            assert len(drefs_from) == 2 and l2.insn.mnem == "LDR"
+            xref = [x for x in l2.xrefs_from if x.type.is_read][0]
+            p_target_ea = xref.to
+
+        # skip pointers which aren't in __auth_ptr or in const data segments
+        p_target_seg_name = sark.Segment(p_target_ea).name
+        if p_target_seg_name != "__auth_ptr" and "const" not in p_target_seg_name.lower():
+            continue
+
+        target_ea = idaapi.get_qword(p_target_ea)
+
+        logger.debug(f"found constant data BLR to {target_ea:#x} at {l1.ea:#x}")
+
+        # verify that the register isn't used in the rest of the function
+        l = find_next_reg_use(l3.next, r)
+        if l is not None:
+            logger.debug(f"  constant data BLR is unpatchable because there's another ref to {r} at {l.ea:#x}")
+            continue
+
+        # patch to a standard call
+        asm = f"BL #{target_ea:#x}"  # we drop PAC flags
+        code = bytes(kp_asm.assemble(asm, l1.ea)[0])
+        apply_code_patch(l1.ea, l3.end_ea, code, kp_asm)
+
+        add_comment(l1, f"FunctionInliner: patched from constant data BLR using {r}")
+
+        logger.debug("  patched")
+        count += 1
+
+    logger.info(f"patched {count} constant data BLRs")
     return retval
 
 
@@ -2375,7 +2469,10 @@ class FunctionInlinerPatchConstantBLRs(FunctionInlinerActionBase):
         with wait_box("patching constant BRs..."):
             if not patch_constant_BRs():
                 return 1
-            patch_constant_tested_BRs()
+            if not patch_constant_tested_BRs():
+                return 1
+            if not patch_constant_data_BLRs():
+                return 1
         return 1
 
     def update(self, ctx):
