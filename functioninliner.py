@@ -25,7 +25,7 @@ import wrapt
 
 INLINED_FUNCTION_PREFIX = "inlined_"
 CLONE_NAME_FMT = "inlined_0x{func_ea:x}_for_0x{src_ea:x}"
-TRACE = False
+TRACE = True
 
 
 # LOGGING
@@ -342,6 +342,18 @@ def add_comment(line, cmt, prepend=True):
         line.comments.regular = cmt + "\n" + line.comments.regular
     else:
         line.comments.regular = line.comments.regular + "\n" + cmt
+
+
+def get_branch_target_ea(line):
+    crefs_from = set()
+    for xref in line.xrefs_from:
+        if not xref.iscode:
+            continue
+        if xref.type.is_flow:
+            continue
+        crefs_from.add(xref.to)
+    assert len(crefs_from) == 1
+    return crefs_from.pop()
 
 
 # NETNODE
@@ -835,21 +847,13 @@ def clone_insn_branch(kp_asm, line, dst_ea, func, ret_ea):
 
     # resolve the the branch target
     if mnem == "BR":
-        target = None
+        target_ea = None
     else:
-        crefs_from = set()
-        for xref in line.xrefs_from:
-            if not xref.iscode:
-                continue
-            if xref.type.is_flow:
-                continue
-            crefs_from.add(xref.to)
-        assert len(crefs_from) == 1
-        target = crefs_from.pop()
+        target_ea = get_branch_target_ea(line)
 
-    if target and func.start_ea <= target < func.end_ea:  # local target -> copy as-is
+    if target_ea and func.start_ea <= target_ea < func.end_ea:  # local target -> copy as-is
         logger.trace("   local target -> copied as-is")
-        return line.bytes, target - func.ea
+        return line.bytes, target_ea - func.ea
 
     else:  # external target -> fix it
         if is_conditional_insn(line.insn):
@@ -862,7 +866,7 @@ def clone_insn_branch(kp_asm, line, dst_ea, func, ret_ea):
             asm = f"BLR {target_reg}"  # we drop PAC flags
         else:
             assert mnem in ("BL", "B")
-            asm = f"BL #{target:#x}"  # we drop PAC flags
+            asm = f"BL #{target_ea:#x}"  # we drop PAC flags
 
         if mnem in ("B", "BR"):  # tail-call -> also add a following B back or RET
             if ret_ea:
@@ -1193,6 +1197,59 @@ def undo_inline_function(func):
 # FUNCTION EXPLORATION
 
 
+def fix_function_noret_flags():
+    found = False
+
+    # pre-iterate since we might be adding functions inside
+    for func in list(sark.functions()):
+        for src_ea, target_ea in function_crefs(func):
+            try:
+                sark.Function(target_ea)
+                continue
+            except sark.exceptions.SarkNoFunction:
+                pass
+
+            # the target is not inside a function, ida probably failed to make one
+
+            logger.debug(f"found call to non-function from {src_ea:#x} to {target_ea:#x}")
+
+            fn = idaapi.func_t()
+            fn.start_ea = target_ea
+            ret = idaapi.find_func_bounds(fn, idaapi.FIND_FUNC_NORMAL)
+            if ret != idaapi.FIND_FUNC_UNDEF:
+                logger.debug(f"finding function bounds unexpectedly succeeded: {ret}. skipping...")
+                continue
+
+            logger.debug(f"  making function failed because of undefined instruction @ {fn.end_ea:#x}")
+            tail_call = sark.Line(fn.end_ea - 4)
+
+            # we expect that to be because the last insn was a BL to a NORET function which isn't
+            # marked as such
+
+            if tail_call.insn.mnem != "BL":
+                logger.debug("  didn't find a BL in the last instruction. skipping...")
+                continue
+
+            target_ea = get_branch_target_ea(tail_call)
+            logger.debug(f"  previous instruction is a BL to {target_ea:#x} -> setting to NORET")
+
+            try:
+                target_func = sark.Function(target_ea)
+            except sark.exceptions.SarkNoFunction:
+                logger.debug("  BL target isn't a function. skipping...")
+                continue
+            if target_func.ea != target_ea:
+                logger.debug("  BL target isn't the beginning of a function. skipping...")
+                continue
+
+            flags = idc.get_func_flags(target_ea)
+            idc.set_func_attr(target_ea, idc.FUNCATTR_FLAGS, flags | idaapi.FUNC_NORET)
+
+            found = True
+
+    return found
+
+
 def create_missing_functions():
     found = False
 
@@ -1456,8 +1513,12 @@ def split_adjacent_functions():
 def preprocess_idb():
     logger.info("preprocessing IDB...")
 
+    logger.debug("reanalyzing program...")
+    reanalyze_program()
+
     exploration_steps = {
         "creating missing functions...": create_missing_functions,
+        "fixing missing NORET flags on functions...": fix_function_noret_flags,
     }
 
     for i in itertools.count():

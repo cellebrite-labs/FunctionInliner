@@ -118,6 +118,7 @@ not do this as part of the `Inline all outlined functions` preprocessing logic.
 Our preprocessing is comprised of a number of steps:
 1. Exploration steps are repeated until there's nothing new to be done:
    1. We create functions at xref targets that IDA didn't make a function out of.
+   1. We identify NORET functions that IDA didn't identify as such.
 2. Preprocessing steps are done afterward the exploration:
    1. We dechunks all of the functions in the binary (split each chunk into a separate function).
       This helps us identify later on which chunks were outlined and which are "real" functions.
