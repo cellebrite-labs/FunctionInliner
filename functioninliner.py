@@ -831,19 +831,24 @@ def clone_insn_ret(kp_asm, line, dst_ea, ret_ea):
 
 
 def clone_insn_branch(kp_asm, line, dst_ea, func, ret_ea):
-    # resolve the the branch target
-    crefs_from = set()
-    for xref in line.xrefs_from:
-        if not xref.iscode:
-            continue
-        if xref.type.is_flow:
-            continue
-        crefs_from.add(xref.to)
-    assert len(crefs_from) == 1
-    target = crefs_from.pop()
+    mnem = line.insn.mnem
 
-    if func.start_ea <= target < func.end_ea:  # local target -> copy as-is
-        logger.trace("   local target -> copying as-is")
+    # resolve the the branch target
+    if mnem == "BR":
+        target = None
+    else:
+        crefs_from = set()
+        for xref in line.xrefs_from:
+            if not xref.iscode:
+                continue
+            if xref.type.is_flow:
+                continue
+            crefs_from.add(xref.to)
+        assert len(crefs_from) == 1
+        target = crefs_from.pop()
+
+    if target and func.start_ea <= target < func.end_ea:  # local target -> copy as-is
+        logger.trace("   local target -> copied as-is")
         return line.bytes, target - func.ea
 
     else:  # external target -> fix it
@@ -851,16 +856,19 @@ def clone_insn_branch(kp_asm, line, dst_ea, func, ret_ea):
             raise FunctionInlinerUnsupportedException("translating conditioned tail-calls is "
                                                       "currently unsupported")
 
-        mnem = line.insn.mnem
-        assert mnem in ("BL", "B")
+        if mnem == "BR":
+            # target is the first arg even if it's an authenticated BR
+            target_reg = line.insn.operands[0].text
+            asm = f"BLR {target_reg}"  # we drop PAC flags
+        else:
+            assert mnem in ("BL", "B")
+            asm = f"BL #{target:#x}"  # we drop PAC flags
 
-        asm = f"BL #{target:#x}"  # we drop PAC flags
-
-        if mnem == "B":  # tail-call -> also add a following B back or RET
+        if mnem in ("B", "BR"):  # tail-call -> also add a following B back or RET
             if ret_ea:
-                asm = f"\n{asm}\nB #{ret_ea:#x}"
+                asm += f"\nB #{ret_ea:#x}"
             else:
-                asm = f"\n{asm}\nRET"
+                asm += "\nRET"
 
         code = bytes(kp_asm.assemble(asm, dst_ea)[0])
 
@@ -928,7 +936,7 @@ def clone_insn_mem(kp_asm, line, dst_ea):
 
         if pageoff_flow:
             # the PAGEOFF shouldn't change, so we can copy as-is
-            logger.trace("   PAGEOFF -> copying as-is")
+            logger.trace("   PAGEOFF -> copied as-is")
             return line.bytes
 
         else:  # direct memory access flow
@@ -1015,13 +1023,12 @@ def clone_function(func, dst_ea, ret_ea=None, kp_asm=None):
 
             # generate some metadata about it
 
-            is_ret = True
+            is_ret = line.insn.mnem == "RET"
+
             is_normal_flow = False
             for xref in line.xrefs_from:
                 if not xref.iscode:
                     continue
-
-                is_ret = False  # a ret instruction has no code xrefs from it
 
                 if not xref.type.is_flow:
                     is_normal_flow = False  # at least one non-flow code xrefs -> not normal flow
@@ -1039,7 +1046,7 @@ def clone_function(func, dst_ea, ret_ea=None, kp_asm=None):
             # identify which kind of translation we should do
 
             if (is_normal_flow and not has_drefs) or (is_ret and not ret_ea):  # "simple" instruction
-                logger.trace("   'simple' instruction flow -> copying as-is")
+                logger.trace("   'simple' instruction flow -> copied as-is")
                 code = line.bytes
 
             elif is_ret and ret_ea:  # ret (and we should translate it)
