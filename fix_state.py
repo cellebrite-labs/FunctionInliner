@@ -16,7 +16,7 @@ ea = idaapi.next_unknown(0, idaapi.BADADDR)
 while ea != idaapi.BADADDR:
     if not has_segment(ea):
         print(f"disabling address {ea:#x}")
-        idaapi.disable_flags(l.start_ea, l.end_ea)
+        idaapi.disable_flags(ea, ea + 4)
     ea = idaapi.next_unknown(ea, idaapi.BADADDR)
 
 # look for dangling clones metadata and:
@@ -154,6 +154,8 @@ print("RE-INLINING MISSING CALLS FOR INLINED FUNCTIONS")
 storage = functioninliner.ClonesStorage()
 
 for func_ea in storage.keys():
-    functioninliner.inline_function(sark.Function(func_ea))
+    f = sark.Function(func_ea)
+    if list(functioninliner.external_callers(f)):
+        functioninliner.inline_function(sark.Function(func_ea))
 
 idaapi.plan_and_wait(0, idaapi.BADADDR)
