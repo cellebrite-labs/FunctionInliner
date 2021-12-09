@@ -1231,107 +1231,6 @@ def is_data_heuristic(line):
     return False
 
 
-def fix_function_noret_flags():
-    found = False
-
-    def remove_noret_typeinfo(func):
-        tif = idaapi.tinfo_t()
-        if idaapi.get_tinfo2(func.ea, tif):
-            tif_s = idaapi.print_tinfo("", 0, 0, idaapi.PRTYPE_1LINE, tif, func.name, "")
-            if "__noreturn" in tif_s:
-                tif_s = tif_s.replace("__noreturn", "")
-                logger.debug(f"  fixing type to '{tif_s}'")
-                idc.SetType(func.ea, tif_s)
-
-    def remove_noret(func):
-        assert func.is_noret
-        flags = idc.get_func_flags(func.ea)
-        idc.set_func_attr(func.ea, idc.FUNCATTR_FLAGS, flags & ~idaapi.FUNC_NORET)
-
-    def is_valid_function_code(line):
-        return line.is_code and list(line.crefs_to)
-
-    def is_bad_noret_func(func):
-        for xref in func.xrefs_to:
-            if not xref.type.is_call:
-                continue
-
-            call = sark.Line(xref.frm)
-            after_ret = call.next
-
-            # if the function is falsly marked as NORET, there might be unexplored/unreachable code
-            # after it
-            if is_valid_function_code(after_ret):
-                continue
-
-            # test for some edge cases
-
-            # if we're followed by a function with no xrefs. this shouldn't be taken as an indicator
-            # since we can't differ between a function end or a tail-call into the next one
-            try:
-                if after_ret.is_code and sark.Function(after_ret).ea == after_ret.ea:
-                    continue
-            except sark.exceptions.SarkNoFunction:
-                pass
-
-            # same thing if it has a dref (fptr) -- IDA might've joined it to our function before
-            # it found out that the above func is a NORET
-            if list(after_ret.drefs_to):
-                logger.debug(f"  found a dref to after call @ {call.ea:#x} -> stepping back")
-                continue
-
-            # same thing if it *looks* like we're followed by a function
-            if after_ret.is_code and is_function_prologue(after_ret):
-                logger.debug(f"  found a prologue with no xrefs after call @ {call.ea:#x} -> stepping back")
-                continue
-
-            # if we're followed by a byte with no value this definitely is a noret function
-            if not idaapi.is_loaded(after_ret.ea):
-                return False
-
-            # if we're followed by data, this definitely is a noret function
-            if is_data_heuristic(after_ret):
-                return False
-
-            # try reanalyzing
-            reanalyze_line(call)
-            assert idaapi.auto_wait_range(call.ea, after_ret.end_ea) >= 0
-
-            # if it didn't work
-            if not is_valid_function_code(after_ret):
-                logger.debug(f"  found non-code/unreachable function lines after caller @ {call.ea:#x}")
-                return True
-
-        return False  # can't say
-
-    # pre-iterate since we might be adding functions inside
-    for func in list(sark.functions()):
-        if not func.is_noret:
-            # not a NORET function. just make sure that its type info is OK
-            remove_noret_typeinfo(func)
-            continue
-
-        logger.debug(f"analyzing NORET function {func.name}")
-
-        # estimate whether if this really is a NORET function
-        if not is_bad_noret_func(func):
-            continue
-
-        logger.debug("  removing NORET flag")
-
-        # remove NORET flag
-        remove_noret(func)
-
-        # also remove from typeinfo
-        remove_noret_typeinfo(func)
-
-        assert not is_bad_noret_func(func)
-
-        found = True
-
-    return found
-
-
 # IDB PREPROCESSING
 
 
@@ -1558,7 +1457,6 @@ def preprocess_idb():
     logger.info("preprocessing IDB...")
 
     exploration_steps = {
-        "fixing erronous NORET flags on functions...": fix_function_noret_flags,
         "creating missing functions...": create_missing_functions,
     }
 
@@ -1602,25 +1500,6 @@ def preprocess_idb():
 
     logger.info("preprocessing done!")
     return True
-
-
-@with_autoanalysis(False)
-def postprocess_idb():
-    logger.info("postprocessing IDB...")
-
-    with wait_box("waiting for auto-analysis to complete..."):
-        if not idaapi.auto_wait():
-            return  # auto-analysis was cancelled
-
-    with wait_box("postprocessing..."):
-        # our inlining may cause more functions to be marked as NORET so we repeat this step from
-        # preprocessing
-        logger.info("fixing erronous NORET flags on functions...")
-        fix_function_noret_flags()
-
-    reanalyze_program()
-
-    logger.info("postprocessing done!")
 
 
 # OUTLINED FUNCTION FINDING
@@ -2470,7 +2349,7 @@ class FunctionInlinerInlineAllAction(FunctionInlinerActionBase):
             return 1
         if not inline_all_functions():
             return 1
-        postprocess_idb()
+        reanalyze_program()
         return 1
 
     def update(self, ctx):
