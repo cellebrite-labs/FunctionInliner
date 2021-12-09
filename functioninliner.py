@@ -1274,6 +1274,12 @@ def fix_function_noret_flags():
             except sark.exceptions.SarkNoFunction:
                 pass
 
+            # same thing if it has a dref (fptr) -- IDA might've joined it to our function before
+            # it found out that the above func is a NORET
+            if list(after_ret.drefs_to):
+                logger.debug(f"  found a dref to after call @ {call.ea:#x} -> stepping back")
+                continue
+
             # same thing if it *looks* like we're followed by a function
             if after_ret.is_code and is_function_prologue(after_ret):
                 logger.debug(f"  found a prologue with no xrefs after call @ {call.ea:#x} -> stepping back")
@@ -1713,8 +1719,12 @@ def find_function_ends(func):
 
 
 def is_function_prologue(line):
-    # check LR is signed (relevant only on PAC devices)
+    # check LR is signed (relevant only ARMv8.3 code which uses it)
     if line.disasm == "PACIBSP":
+        return True
+
+    # check for BTI (relevant only ARMv8.5 code which uses it)
+    if line.insn.mnem == "BTI" and line.insn.operands[0].text == "c":
         return True
 
     # expect stack space to be allocated
