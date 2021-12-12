@@ -25,7 +25,7 @@ import wrapt
 
 INLINED_FUNCTION_PREFIX = "inlined_"
 CLONE_NAME_FMT = "inlined_0x{func_ea:x}_for_0x{src_ea:x}"
-TRACE = True
+TRACE = False
 
 
 # LOGGING
