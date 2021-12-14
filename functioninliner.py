@@ -1513,10 +1513,9 @@ def split_adjacent_functions():
         else:
             break
 
-
 @with_autoanalysis(False)
-def preprocess_idb():
-    logger.info("preprocessing IDB...")
+def explore_idb():
+    logger.info("exploring IDB...")
 
     logger.debug("reanalyzing program...")
     reanalyze_program()
@@ -1536,7 +1535,7 @@ def preprocess_idb():
                 if not idaapi.auto_wait():
                     return False  # auto-analysis was cancelled
 
-                logger.info(msg)
+                logger.info(f"{msg} (iteration {i})")
                 found = found or func()
 
                 if idaapi.user_cancelled():
@@ -1545,6 +1544,14 @@ def preprocess_idb():
             reanalyze_program()
         else:
             break
+
+    logger.info("exploration done!")
+    return True
+
+
+@with_autoanalysis(False)
+def preprocess_idb():
+    logger.info("preprocessing IDB...")
 
     preprocessing_steps = {
         "dechunking functions...": dechunk_functions,
@@ -2413,6 +2420,8 @@ class FunctionInlinerInlineAllAction(FunctionInlinerActionBase):
         return "Inline all outlined functions"
 
     def activate(self, ctx):
+        if not explore_idb():
+            return 1
         if not preprocess_idb():
             return 1
         if not inline_all_functions():
@@ -2430,6 +2439,8 @@ class FunctionInlinerPatchConstantBLRs(FunctionInlinerActionBase):
         return "Patch constant register-based calls to regular calls"
 
     def activate(self, ctx):
+        if not explore_idb():
+            return 1
         with wait_box("patching constant BRs..."):
             if not patch_constant_BRs():
                 return 1
