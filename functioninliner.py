@@ -1217,7 +1217,7 @@ def fix_function_noret_flags():
             fn.start_ea = target_ea
             ret = idaapi.find_func_bounds(fn, idaapi.FIND_FUNC_NORMAL)
             if ret != idaapi.FIND_FUNC_UNDEF:
-                logger.debug(f"finding function bounds unexpectedly succeeded: {ret}. skipping...")
+                logger.debug(f"  finding function bounds unexpectedly succeeded: {ret}. skipping...")
                 continue
 
             logger.debug(f"  making function failed because of undefined instruction @ {fn.end_ea:#x}")
@@ -1230,22 +1230,25 @@ def fix_function_noret_flags():
                 logger.debug("  didn't find a BL in the last instruction. skipping...")
                 continue
 
-            target_ea = get_branch_target_ea(tail_call)
-            logger.debug(f"  previous instruction is a BL to {target_ea:#x} -> setting to NORET")
+            bl_target_ea = get_branch_target_ea(tail_call)
+            logger.debug(f"  previous instruction is a BL to {bl_target_ea:#x} -> setting to NORET")
 
             try:
-                target_func = sark.Function(target_ea)
+                bl_target_func = sark.Function(bl_target_ea)
             except sark.exceptions.SarkNoFunction:
                 logger.debug("  BL target isn't a function. skipping...")
                 continue
-            if target_func.ea != target_ea:
+            if bl_target_func.ea != bl_target_ea:
                 logger.debug("  BL target isn't the beginning of a function. skipping...")
                 continue
 
-            flags = idc.get_func_flags(target_ea)
-            idc.set_func_attr(target_ea, idc.FUNCATTR_FLAGS, flags | idaapi.FUNC_NORET)
-
-            found = True
+            flags = idc.get_func_flags(bl_target_ea)
+            if not (flags & idaapi.FUNC_NORET):
+                idc.set_func_attr(bl_target_ea, idc.FUNCATTR_FLAGS, flags | idaapi.FUNC_NORET)
+                idaapi.plan_range(fn.start_ea, fn.end_ea)
+                found = True
+            else:
+                logger.debug("  BL target was already set to NORET. skipping...")
 
     return found
 
@@ -1269,6 +1272,8 @@ def create_missing_functions():
 
             if idaapi.add_func(target_ea):
                 found = True
+            else:
+                logger.debug("  failed to make function")
 
     return found
 
@@ -1517,6 +1522,8 @@ def preprocess_idb():
     reanalyze_program()
 
     exploration_steps = {
+        # some times IDA misses some trivial functions on reanalysis, I'm not sure why, so we do
+        # this ourselves as well
         "creating missing functions...": create_missing_functions,
         "fixing missing NORET flags on functions...": fix_function_noret_flags,
     }
