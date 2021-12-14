@@ -1605,7 +1605,7 @@ def code_flow_iterator(line, forward=True, stop=None, abort_on_calls=True, dfs=F
         # therefore analysis following this code flow shouldn't treat it as an ABI-complaint
         # function and "skip" it
         if abort_on_calls:
-            if any(x.type.is_code and idaapi.func_contains(func._func, x.to) for x in
+            if any(x.type.is_code and not idaapi.func_contains(func._func, x.to) for x in
                    line.xrefs_from):
                 raise FunctionInlinerUnknownFlowException()
 
@@ -1871,8 +1871,10 @@ def is_function_using_uninitialized_regs(func):
                             continue
 
                         # mark all of the "parts" of this register as initialized
-                        logger.trace(f"   marking *{r[1:]} as initialized")
-                        new_initialized_regs.update(register_parts(r))
+                        parts = list(register_parts(r))
+                        parts_s = ", ".join(parts)
+                        logger.trace(f"   marking {{{parts_s}}} as initialized")
+                        new_initialized_regs.update(parts)
 
             initialized_regs |= new_initialized_regs
     except FunctionInlinerUnknownFlowException:
