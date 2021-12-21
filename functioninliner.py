@@ -9,7 +9,15 @@ import struct
 import time
 import types
 
-import idaapi
+import ida_auto
+import ida_bytes
+import ida_funcs
+import ida_idaapi
+import ida_idp
+import ida_kernwin
+import ida_segment
+import ida_ua
+import ida_xref
 import idc
 
 import keypatch
@@ -68,11 +76,11 @@ class FunctionInlinerUnknownFlowException(FunctionInlinerException):
 
 @contextlib.contextmanager
 def autoanalysis(enabled):
-    idaapi.enable_auto(enabled)
+    ida_auto.enable_auto(enabled)
     try:
         yield None
     finally:
-        idaapi.enable_auto(not enabled)
+        ida_auto.enable_auto(not enabled)
 
 
 def with_autoanalysis(enabled):
@@ -86,18 +94,18 @@ def with_autoanalysis(enabled):
 @contextlib.contextmanager
 def wait_box(msg, hide_cancel=False):
     prefix = "HIDECANCEL\n" if hide_cancel else ""
-    idaapi.show_wait_box(prefix + msg)
+    ida_kernwin.show_wait_box(prefix + msg)
     try:
         yield None
     finally:
-        idaapi.hide_wait_box()
+        ida_kernwin.hide_wait_box()
 
 
 def get_function_under_cursor():
     line = sark.Line()
 
     # abort on unmapped addresses
-    if not idaapi.is_mapped(line.ea):
+    if not ida_bytes.is_mapped(line.ea):
         return None
 
     # if we're on a call -> return its target
@@ -130,14 +138,14 @@ def align_upwards(ea, alignment):
 
 
 def reanalyze_line(line):
-    idaapi.plan_range(line.ea, line.end_ea)
+    ida_auto.plan_range(line.ea, line.end_ea)
 
 
 def reanalyze_program():
     """ we used to not reanalyze the entire program, but for some reason when we surgically marked
     for reanalysis only the stuff that we've changed, sometimes the auto analysis didn't recursively
     go through to everything """
-    idaapi.plan_range(0, idc.BADADDR)
+    ida_auto.plan_range(0, ida_idaapi.BADADDR)
 
 
 def is_conditional_insn(insn):
@@ -151,7 +159,7 @@ def is_chunked_function(func):
 
 def function_chunk_eas(func):
     ea = idc.first_func_chunk(func.ea)
-    while ea != idc.BADADDR:
+    while ea != ida_idaapi.BADADDR:
         yield ea
         ea = idc.next_func_chunk(func.ea, ea)
 
@@ -188,8 +196,8 @@ def function_chunk_crefs(ea, ret_ea=None):
 
 
 def function_chunk_parent_eas(ea):
-    fchunk = idaapi.get_fchunk(ea)
-    fpi = idaapi.func_parent_iterator_t(fchunk)
+    fchunk = ida_funcs.get_fchunk(ea)
+    fpi = ida_funcs.func_parent_iterator_t(fchunk)
     if not fpi.first():
         return
 
@@ -248,7 +256,7 @@ def function_crefs(func, ret_ea=None):
     chunk_eas = list(function_chunk_eas(func))
     for chunk_ea in chunk_eas:
         for off, target_ea in function_chunk_crefs(chunk_ea, ret_ea):
-            if idaapi.func_contains(func._func, target_ea):
+            if ida_funcs.func_contains(func._func, target_ea):
                 continue
 
             src_ea = chunk_ea + off
@@ -519,14 +527,14 @@ def create_code_segment(name, size, close_to=None, page_align=False):
     # delete a previously cloned segment if such exists
     for s in segs:
         if s.name == name:
-            idaapi.del_segm(s.start_ea, idaapi.SEGMOD_KILL)
+            ida_segment.del_segm(s.start_ea, ida_segment.SEGMOD_KILL)
 
     # map the holes between existing segments
     holes = []
     holes.append((0, segs[0].start_ea))
     for s, next_s in zip(segs, segs[1:]):
         holes.append((s.end_ea, next_s.start_ea))
-    holes.append((segs[-1].end_ea, idc.BADADDR))
+    holes.append((segs[-1].end_ea, ida_idaapi.BADADDR))
 
     # align the start and end of each hole
     holes = [(align_upwards(h[0], alignment), align_downwards(h[1], alignment)) for h in holes]
@@ -554,20 +562,20 @@ def create_code_segment(name, size, close_to=None, page_align=False):
         start_ea = hole[1] - size
         end_ea = hole[1]
 
-    seg_t = idaapi.segment_t()
+    seg_t = ida_segment.segment_t()
     seg_t.start_ea = start_ea
     seg_t.end_ea = end_ea
-    seg_t.align = idaapi.saRelDble
-    seg_t.comb = idaapi.scPub
-    seg_t.perm = idaapi.SEGPERM_EXEC | idaapi.SEGPERM_READ
+    seg_t.align = ida_segment.saRelDble
+    seg_t.comb = ida_segment.scPub
+    seg_t.perm = ida_segment.SEGPERM_EXEC | ida_segment.SEGPERM_READ
     seg_t.bitness = 2  # 64 bits
-    seg_t.sel = idaapi.setup_selector(0)
-    seg_t.type = idaapi.SEG_CODE
+    seg_t.sel = ida_segment.setup_selector(0)
+    seg_t.type = ida_segment.SEG_CODE
     seg_t.color = idc.DEFCOLOR
 
-    flags = idaapi.ADDSEG_NOSREG | idaapi.ADDSEG_QUIET | idaapi.ADDSEG_NOAA
+    flags = ida_segment.ADDSEG_NOSREG | ida_segment.ADDSEG_QUIET | ida_segment.ADDSEG_NOAA
 
-    idaapi.add_segm_ex(seg_t, name, "CODE", flags)
+    ida_segment.add_segm_ex(seg_t, name, "CODE", flags)
 
     return sark.Segment(start_ea)
 
@@ -599,10 +607,10 @@ def fix_outlined_function_call(src, clone_ea, clone_end_ea, func_ea, kp_asm=None
         kp_asm = keypatch.Keypatch_Asm()
 
     # unfortunately, we've seen cases where IDA creates a function out of our clone instead of a
-    # function chunk, and this also happens sometimes when calling idaapi.auto_apply_tail.
-    # therefore, we first idaapi.append_func_tail and only then patch and plan to reanalyze the
+    # function chunk, and this also happens sometimes when calling auto_apply_tail.
+    # therefore, we first ida_funcs.append_func_tail and only then patch and plan to reanalyze the
     # caller
-    idaapi.append_func_tail(idaapi.get_func(src.ea), clone_ea, clone_end_ea)
+    ida_funcs.append_func_tail(ida_funcs.get_func(src.ea), clone_ea, clone_end_ea)
 
     # replace the source instruction with a B to our clone
     mnem = src.insn.mnem
@@ -615,11 +623,11 @@ def fix_outlined_function_call(src, clone_ea, clone_end_ea, func_ea, kp_asm=None
     asm = f"{opcode} #{clone_ea:#x}"  # we drop PAC flags
     code = bytes(kp_asm.assemble(asm, src.ea)[0])
     assert len(code) == src.size
-    idaapi.patch_bytes(src.ea, code)
+    ida_bytes.patch_bytes(src.ea, code)
     reanalyze_line(src)
 
     # delete the original xref
-    idaapi.del_cref(src.ea, func_ea, 0)
+    ida_xref.del_cref(src.ea, func_ea, 0)
 
 
 def inline_function_call(src, func, kp_asm=None):
@@ -671,11 +679,11 @@ def inline_function_call(src, func, kp_asm=None):
         func_storage.pop(clone_ea, None)
 
         # undo the source patch if it's already been done
-        idaapi.patch_bytes(src.ea, src.bytes)
+        ida_bytes.patch_bytes(src.ea, src.bytes)
         reanalyze_line(src)
 
         # remove the created segment
-        idaapi.del_segm(clone_ea, idaapi.SEGMOD_KILL)
+        ida_segment.del_segm(clone_ea, ida_segment.SEGMOD_KILL)
 
         logger.error(f"unhandled exception was raised while inlining call to {func.name} from {src.ea:#x}")
         raise
@@ -736,7 +744,7 @@ def inline_function(func, kp_asm=None):
         undo_inline_function_call(src, inlined_func)
 
     # wait for analysis of our function
-    assert idaapi.auto_wait_range(func.ea, func.end_ea) >= 0
+    assert ida_auto.auto_wait_range(func.ea, func.end_ea) >= 0
 
     # assert that the function is now unchunked
     assert not is_chunked_function(func)
@@ -754,7 +762,7 @@ def inline_function(func, kp_asm=None):
         # be indexed as well
         if func_has_outgoing_crefs:
             seg = sark.Segment(clone_ea)
-            assert idaapi.auto_wait_range(seg.start_ea, seg.end_ea) >= 0
+            assert ida_auto.auto_wait_range(seg.start_ea, seg.end_ea) >= 0
 
     # redo inlining into our function clones
     for _, inlined_func in inlined_function_calls:
@@ -781,9 +789,9 @@ def inline_all_functions():
     with wait_box("finding outlined functions..."):
         outlined_funcs = []
         for func in tqdm.tqdm(all_funcs, desc="analyzing", ncols=80, unit="func"):
-            idaapi.show_auto(func.ea)
+            ida_auto.show_auto(func.ea)
 
-            if idaapi.user_cancelled():
+            if ida_kernwin.user_cancelled():
                 return False
 
             logger.debug(f"analyzing {func.name}")
@@ -803,9 +811,9 @@ def inline_all_functions():
         start_time = time.time()
 
         for func in tqdm.tqdm(outlined_funcs, desc="inlining", ncols=80, unit="func"):
-            idaapi.show_auto(func.ea)
+            ida_auto.show_auto(func.ea)
 
-            if idaapi.user_cancelled():
+            if ida_kernwin.user_cancelled():
                 retval = False
                 break
 
@@ -899,7 +907,7 @@ def clone_insn_mem(kp_asm, line, dst_ea):
                                                   "currently unsupported")
 
     # full_mnem should be the same as insn.mnem, but compare the full one just to be on the safe side
-    full_mnem = idc.print_insn_mnem(line.ea)
+    full_mnem = ida_ua.print_insn_mnem(line.ea)
 
     if full_mnem == "ADR":
         # usually ADR is followed by NOP, because the compiler doesn't know if it'll be ADR or
@@ -966,7 +974,7 @@ def clone_insn_mem(kp_asm, line, dst_ea):
 def fix_cloned_branch(kp_asm, src_ea, current_target_ea, fixed_target_ea):
     # analyze this single instruction
     idc.set_flag(idc.INF_AF, idc.AF_CODE, 0)
-    idaapi.create_insn(src_ea)
+    ida_ua.create_insn(src_ea)
     idc.set_flag(idc.INF_AF, idc.AF_CODE, 1)
 
     line = sark.Line(src_ea)
@@ -987,7 +995,7 @@ def fix_cloned_branch(kp_asm, src_ea, current_target_ea, fixed_target_ea):
     assert ops_fixed == 1
 
     # recreate the instruction
-    full_mnem = idc.print_insn_mnem(line.ea)
+    full_mnem = ida_ua.print_insn_mnem(line.ea)
     asm = full_mnem + " " + ", ".join(new_ops)
     code = bytes(kp_asm.assemble(asm, line.ea)[0])
 
@@ -996,8 +1004,8 @@ def fix_cloned_branch(kp_asm, src_ea, current_target_ea, fixed_target_ea):
     assert line.size == len(code)
 
     # undo the analysis of this instruction and patch it
-    idaapi.del_items(src_ea, idaapi.DELIT_SIMPLE, line.size)
-    idaapi.patch_bytes(line.ea, code)
+    ida_bytes.del_items(src_ea, ida_bytes.DELIT_SIMPLE, line.size)
+    ida_bytes.patch_bytes(line.ea, code)
 
 
 def clone_function(func, dst_ea, ret_ea=None, kp_asm=None):
@@ -1040,7 +1048,7 @@ def clone_function(func, dst_ea, ret_ea=None, kp_asm=None):
                 else:
                     is_normal_flow = True  # all (at least one) flow code xrefs -> normal flow
 
-            if any(idaapi.is_mapped(ea) for ea in line.drefs_from):
+            if any(ida_bytes.is_mapped(ea) for ea in line.drefs_from):
                 # IDA marks enum refs as drefs with top address byte set to 0xff, so we test whether
                 # we have drefs for EAs that are actually mapped
                 has_drefs = True
@@ -1087,7 +1095,7 @@ def clone_function(func, dst_ea, ret_ea=None, kp_asm=None):
 
             # write the new code to the clone
 
-            idaapi.patch_bytes(dst_ea, code)
+            ida_bytes.patch_bytes(dst_ea, code)
             dst_ea += len(code)
 
         except Exception:
@@ -1112,7 +1120,7 @@ def clone_function(func, dst_ea, ret_ea=None, kp_asm=None):
             logger.trace("  no fixing is required")
 
     # analyze the clone as code
-    idaapi.auto_make_code(clone_ea)
+    ida_auto.auto_make_code(clone_ea)
 
     return dst_ea
 
@@ -1124,7 +1132,7 @@ def get_inlined_function_under_cursor():
     line = sark.Line()
 
     # abort on unmapped addresses
-    if not idaapi.is_mapped(line.ea):
+    if not ida_bytes.is_mapped(line.ea):
         return None
 
     # if we're on a branch/call -> analyze its target instead
@@ -1162,21 +1170,21 @@ def undo_inline_function_call(src, func):
     logger.debug(f"undoing clone of {func.name} at {clone_info.clone_ea:#x} for caller at {src.ea:#x}")
 
     # delete the cloned function
-    idaapi.del_segm(clone_info.clone_ea, idaapi.SEGMOD_KILL)
+    ida_segment.del_segm(clone_info.clone_ea, ida_segment.SEGMOD_KILL)
 
-    if idaapi.is_mapped(src.ea):  # maybe this was into another clone that has been undone as well
+    if ida_bytes.is_mapped(src.ea):  # maybe this was into another clone that has been undone as well
         # revert the BL patch
-        # we don't want to do idaapi.revert_byte() here, since the patched opcode may have been
+        # we don't want to do revert_byte() here, since the patched opcode may have been
         # originally patched (e.g. inlining one outlined function into another outlined function
         # that has been inlined)
-        idaapi.patch_bytes(src.ea, clone_info.orig_bytes)
+        ida_bytes.patch_bytes(src.ea, clone_info.orig_bytes)
         reanalyze_line(src)
 
         # remove unreachable chunks from the calling function. this may happen in case our clone had
         # function chunks (e.g. it called other outlined functions that were inlined into it)
         src_func = sark.Function(src)
         for chunk_ea in unreachable_function_chunks_eas(src_func):
-            idaapi.remove_func_tail(src_func._func, chunk_ea)
+            ida_funcs.remove_func_tail(src_func._func, chunk_ea)
 
     # remove from storage
     del func_storage[src.ea]
@@ -1213,10 +1221,10 @@ def fix_function_noret_flags():
 
             logger.debug(f"found call to non-function from {src_ea:#x} to {target_ea:#x}")
 
-            fn = idaapi.func_t()
+            fn = ida_funcs.func_t()
             fn.start_ea = target_ea
-            ret = idaapi.find_func_bounds(fn, idaapi.FIND_FUNC_NORMAL)
-            if ret != idaapi.FIND_FUNC_UNDEF:
+            ret = ida_funcs.find_func_bounds(fn, ida_funcs.FIND_FUNC_NORMAL)
+            if ret != ida_funcs.FIND_FUNC_UNDEF:
                 logger.debug(f"  finding function bounds unexpectedly succeeded: {ret}. skipping...")
                 continue
 
@@ -1243,9 +1251,9 @@ def fix_function_noret_flags():
                 continue
 
             flags = idc.get_func_flags(bl_target_ea)
-            if not (flags & idaapi.FUNC_NORET):
-                idc.set_func_attr(bl_target_ea, idc.FUNCATTR_FLAGS, flags | idaapi.FUNC_NORET)
-                idaapi.plan_range(fn.start_ea, fn.end_ea)
+            if not (flags & ida_funcs.FUNC_NORET):
+                idc.set_func_attr(bl_target_ea, idc.FUNCATTR_FLAGS, flags | ida_funcs.FUNC_NORET)
+                ida_auto.plan_range(fn.start_ea, fn.end_ea)
                 found = True
             else:
                 logger.debug("  BL target was already set to NORET. skipping...")
@@ -1270,7 +1278,7 @@ def create_missing_functions():
             logger.debug(f"found call to non-function from {src_ea:#x} to {target_ea:#x} "
                          "-> making function")
 
-            if idaapi.add_func(target_ea):
+            if ida_funcs.add_func(target_ea):
                 found = True
             else:
                 logger.debug("  failed to make function")
@@ -1315,7 +1323,7 @@ def detach_chunk(chunk_ea):
         idc.remove_fchunk(parent_ea, chunk_ea)
 
     # create a function out of it
-    idaapi.add_func(chunk_ea, chunk_end_ea)
+    ida_funcs.add_func(chunk_ea, chunk_end_ea)
     func = sark.Function(chunk_ea)
 
     # remove unreachable chunks from the parents. this may happen in case our detachee has had
@@ -1323,7 +1331,7 @@ def detach_chunk(chunk_ea):
     for parent_ea in parents:
         parent_func = sark.Function(parent_ea)
         for chunk_ea in unreachable_function_chunks_eas(parent_func):
-            idaapi.remove_func_tail(parent_func._func, chunk_ea)
+            ida_funcs.remove_func_tail(parent_func._func, chunk_ea)
 
     return func
 
@@ -1333,7 +1341,7 @@ def dechunk_functions():
     functions = list(sark.functions())
 
     for func in functions:
-        if idaapi.user_cancelled():
+        if ida_kernwin.user_cancelled():
             return False
 
         if not is_originally_chunked_function(func):
@@ -1390,8 +1398,8 @@ def split_outlined_function_trampolines():
 
         # split the function after this branch
         end_ea = src_func.end_ea
-        idaapi.set_func_end(l.ea, target_ea)
-        idaapi.add_func(target_ea, end_ea)
+        ida_funcs.set_func_end(l.ea, target_ea)
+        ida_funcs.add_func(target_ea, end_ea)
 
 
 def make_function_chunk(line):
@@ -1408,10 +1416,10 @@ def make_function_chunk(line):
     except sark.exceptions.SarkNoFunction:
         func = None
         should_split = None
-        chunk_end_ea = idc.BADADDR
+        chunk_end_ea = ida_idaapi.BADADDR
 
     if should_split:
-        idaapi.set_func_end(chunk_start_ea, line.ea)
+        ida_funcs.set_func_end(chunk_start_ea, line.ea)
         reanalyze_line(line.prev)
         to_reprocess.append(func)
 
@@ -1420,15 +1428,15 @@ def make_function_chunk(line):
     for caller in external_callers(line, functions_only=True, include_flow=True):
         for caller_func in containing_funcs(caller):
             if func != caller_func:
-                idaapi.append_func_tail(caller_func._func, line.ea, chunk_end_ea)
+                ida_funcs.append_func_tail(caller_func._func, line.ea, chunk_end_ea)
                 to_reprocess.append(caller_func)
 
     if should_split:
         # re-add it to the original function and set it as the owner
-        idaapi.append_func_tail(func._func, line.ea, chunk_end_ea)
-        idaapi.set_tail_owner(idaapi.get_fchunk(line.ea), func.ea)
+        ida_funcs.append_func_tail(func._func, line.ea, chunk_end_ea)
+        ida_funcs.set_tail_owner(ida_funcs.get_fchunk(line.ea), func.ea)
 
-    idaapi.plan_range(line.ea, chunk_end_ea)
+    ida_auto.plan_range(line.ea, chunk_end_ea)
 
     return to_reprocess
 
@@ -1464,11 +1472,11 @@ def split_function(line):
     # split the function
     logger.debug(f"  splitting function chunk at {line.ea:#x}")
 
-    idaapi.set_func_end(chunk_start_ea, line.ea)
+    ida_funcs.set_func_end(chunk_start_ea, line.ea)
     reanalyze_line(line.prev)
 
-    idaapi.add_func(line.ea, chunk_end_ea)
-    idaapi.plan_range(line.ea, chunk_end_ea)
+    ida_funcs.add_func(line.ea, chunk_end_ea)
+    ida_auto.plan_range(line.ea, chunk_end_ea)
 
     return (sark.Function(line.ea), sark.Function(line.prev.ea))
 
@@ -1505,13 +1513,14 @@ def split_adjacent_functions():
 
         if to_reprocess:
             # wait for what we've previously done to finish analysing
-            if not idaapi.auto_wait():
+            if not ida_auto.auto_wait():
                 return False  # auto-analysis was cancelled
 
             # repeat with what we need to reprocess
             functions = to_reprocess
         else:
             break
+
 
 @with_autoanalysis(False)
 def explore_idb():
@@ -1532,13 +1541,13 @@ def explore_idb():
         with wait_box(f"exploring (iteration {i})..."):
             for msg, func in exploration_steps.items():
                 logger.debug("waiting for auto-analysis to complete...")
-                if not idaapi.auto_wait():
+                if not ida_auto.auto_wait():
                     return False  # auto-analysis was cancelled
 
                 logger.info(f"{msg} (iteration {i})")
                 found = found or func()
 
-                if idaapi.user_cancelled():
+                if ida_kernwin.user_cancelled():
                     return False
         if found:
             reanalyze_program()
@@ -1562,13 +1571,13 @@ def preprocess_idb():
     with wait_box("preprocessing..."):
         for msg, func in preprocessing_steps.items():
             logger.debug("waiting for auto-analysis to complete...")
-            if not idaapi.auto_wait():
+            if not ida_auto.auto_wait():
                 return False  # auto-analysis was cancelled
 
             logger.info(msg)
             func()
 
-            if idaapi.user_cancelled():
+            if ida_kernwin.user_cancelled():
                 return False
 
     reanalyze_program()
@@ -1605,7 +1614,7 @@ def code_flow_iterator(line, forward=True, stop=None, abort_on_calls=True, dfs=F
         # therefore analysis following this code flow shouldn't treat it as an ABI-complaint
         # function and "skip" it
         if abort_on_calls:
-            if any(x.type.is_code and not idaapi.func_contains(func._func, x.to) for x in
+            if any(x.type.is_code and not ida_funcs.func_contains(func._func, x.to) for x in
                    line.xrefs_from):
                 raise FunctionInlinerUnknownFlowException()
 
@@ -1614,10 +1623,10 @@ def code_flow_iterator(line, forward=True, stop=None, abort_on_calls=True, dfs=F
 
         if forward:
             crefs = [x.to for x in line.xrefs_from if
-                     x.type.is_code and idaapi.func_contains(func._func, x.to)]
+                     x.type.is_code and ida_funcs.func_contains(func._func, x.to)]
         else:
             crefs = [x.frm for x in line.xrefs_to if
-                     x.type.is_code and idaapi.func_contains(func._func, x.frm)]
+                     x.type.is_code and ida_funcs.func_contains(func._func, x.frm)]
 
         if len(crefs) == 0:
             break
@@ -1642,7 +1651,7 @@ def code_flow_iterator(line, forward=True, stop=None, abort_on_calls=True, dfs=F
 
 def find_function_ends(func):
     def is_internal(ea):
-        return idaapi.func_contains(func._func, ea)
+        return ida_funcs.func_contains(func._func, ea)
 
     def finder(ea, visited):
         end_eas = set()
@@ -1763,11 +1772,11 @@ def get_fake_condition_flags_ops(insn):
     # create a fake IDA op_t
     fake_op_t = types.SimpleNamespace(
         n=-1,
-        type=idaapi.o_idpspec5 + 1,  # simulated as o_cond in arm.hpp, Sark will treat as "special"
+        type=ida_ua.o_idpspec5 + 1,  # simulated as o_cond in arm.hpp, Sark will treat as "special"
         addr=0,
         value=0,
         flags=0,
-        dtype=idaapi.dt_void,
+        dtype=ida_ua.dt_void,
         reg=-1
     )
 
@@ -2092,8 +2101,8 @@ def apply_code_patch(start_ea, end_ea, code, kp_asm=None):
         code += nop * (nop_slide_size // len(nop))
 
     assert len(code) == size
-    idaapi.patch_bytes(start_ea, code)
-    idaapi.plan_range(start_ea, end_ea)
+    ida_bytes.patch_bytes(start_ea, code)
+    ida_auto.plan_range(start_ea, end_ea)
 
 
 def patch_constant_BRs(kp_asm=None):
@@ -2111,7 +2120,7 @@ def patch_constant_BRs(kp_asm=None):
     count = 0
     retval = True
     for l1, l2, l3 in linegroups(3):
-        if idaapi.user_cancelled():
+        if ida_kernwin.user_cancelled():
             retval = False
             break
 
@@ -2179,7 +2188,7 @@ def patch_constant_tested_BRs(kp_asm=None):
     count = 0
     retval = True
     for l1, l2, l3, l4, l5 in linegroups(5):
-        if idaapi.user_cancelled():
+        if ida_kernwin.user_cancelled():
             retval = False
             break
 
@@ -2259,7 +2268,7 @@ def patch_constant_data_BLRs(kp_asm=None):
     count = 0
     retval = True
     for l1, l2, l3 in linegroups(3):
-        if idaapi.user_cancelled():
+        if ida_kernwin.user_cancelled():
             retval = False
             break
 
@@ -2300,7 +2309,7 @@ def patch_constant_data_BLRs(kp_asm=None):
         if p_target_seg_name != "__auth_ptr" and "const" not in p_target_seg_name.lower():
             continue
 
-        target_ea = idaapi.get_qword(p_target_ea)
+        target_ea = ida_bytes.get_qword(p_target_ea)
 
         logger.debug(f"found constant data BLR to {target_ea:#x} at {l1.ea:#x}")
 
@@ -2327,7 +2336,7 @@ def patch_constant_data_BLRs(kp_asm=None):
 # PLUGIN STUFF
 
 
-class FunctionInlinerActionBase(idaapi.action_handler_t):
+class FunctionInlinerActionBase(ida_kernwin.action_handler_t):
     def __init__(self, plugin):
         super().__init__()
         self.plugin = plugin
@@ -2350,7 +2359,7 @@ class FunctionInlinerActionBase(idaapi.action_handler_t):
 
     @property
     def icon(self):
-        return idaapi.get_action_icon("MakeFunction")[1]
+        return ida_kernwin.get_action_icon("MakeFunction")[1]
 
     @property
     def flags(self):
@@ -2361,7 +2370,7 @@ class FunctionInlinerActionBase(idaapi.action_handler_t):
         return f"Edit/Plugins/{self.plugin.wanted_name}/"
 
     def register(self):
-        desc = idaapi.action_desc_t(
+        desc = ida_kernwin.action_desc_t(
             self.name,
             self.label,
             self,
@@ -2369,10 +2378,10 @@ class FunctionInlinerActionBase(idaapi.action_handler_t):
             self.tooltip,
             self.icon,
         )
-        idaapi.register_action(desc)
+        ida_kernwin.register_action(desc)
 
     def unregister(self):
-        idaapi.unregister_action(self.name)
+        ida_kernwin.unregister_action(self.name)
 
     def activate(self, ctx):
         raise NotImplementedError()
@@ -2394,9 +2403,9 @@ class FunctionInlinerInlineAction(FunctionInlinerActionBase):
     def update(self, ctx):
         f = get_function_under_cursor()
         if f and list(external_callers(f)):
-            return idaapi.AST_ENABLE
+            return ida_kernwin.AST_ENABLE
         else:
-            return idaapi.AST_DISABLE
+            return ida_kernwin.AST_DISABLE
 
 
 class FunctionInlinerUndoInlineAction(FunctionInlinerActionBase):
@@ -2411,9 +2420,9 @@ class FunctionInlinerUndoInlineAction(FunctionInlinerActionBase):
 
     def update(self, ctx):
         if get_inlined_function_under_cursor():
-            return idaapi.AST_ENABLE
+            return ida_kernwin.AST_ENABLE
         else:
-            return idaapi.AST_DISABLE
+            return ida_kernwin.AST_DISABLE
 
 
 class FunctionInlinerInlineAllAction(FunctionInlinerActionBase):
@@ -2432,7 +2441,7 @@ class FunctionInlinerInlineAllAction(FunctionInlinerActionBase):
         return 1
 
     def update(self, ctx):
-        return idaapi.AST_ENABLE_ALWAYS
+        return ida_kernwin.AST_ENABLE_ALWAYS
 
 
 class FunctionInlinerPatchConstantBLRs(FunctionInlinerActionBase):
@@ -2453,10 +2462,10 @@ class FunctionInlinerPatchConstantBLRs(FunctionInlinerActionBase):
         return 1
 
     def update(self, ctx):
-        return idaapi.AST_ENABLE_ALWAYS
+        return ida_kernwin.AST_ENABLE_ALWAYS
 
 
-class FunctionInlinerHooks(idaapi.UI_Hooks):
+class FunctionInlinerHooks(ida_kernwin.UI_Hooks):
     def __init__(self, ctx_actions, menu_actions):
         super().__init__()
 
@@ -2465,24 +2474,18 @@ class FunctionInlinerHooks(idaapi.UI_Hooks):
 
     def ready_to_run(self):
         for action in self.menu_actions:
-            idaapi.attach_action_to_menu(action.path, action.name, idaapi.SETMENU_APP)
+            ida_kernwin.attach_action_to_menu(action.path, action.name, ida_kernwin.SETMENU_APP)
 
-    if idaapi.IDA_SDK_VERSION >= 700:
-        def finish_populating_widget_popup(self, form, popup):
-            if idaapi.get_widget_type(form) in (idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE):
-                idaapi.attach_action_to_popup(form, popup, "-", None, idaapi.SETMENU_FIRST)
-                for action in reversed(self.ctx_actions):
-                    idaapi.attach_action_to_popup(form, popup, action.name, None, idaapi.SETMENU_FIRST)
-    else:
-        def finish_populating_tform_popup(self, form, popup):
-            if idaapi.get_tform_type(form) in (idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE):
-                idaapi.attach_action_to_popup(form, popup, "-", None, idaapi.SETMENU_FIRST)
-                for action in reversed(self.ctx_actions):
-                    idaapi.attach_action_to_popup(form, popup, action.name, None, idaapi.SETMENU_FIRST)
+    def finish_populating_widget_popup(self, form, popup):
+        if ida_kernwin.get_widget_type(form) in (ida_kernwin.BWN_DISASM, ida_kernwin.BWN_PSEUDOCODE):
+            ida_kernwin.attach_action_to_popup(form, popup, "-", None, ida_kernwin.SETMENU_FIRST)
+            for action in reversed(self.ctx_actions):
+                ida_kernwin.attach_action_to_popup(form, popup, action.name, None, ida_kernwin.SETMENU_FIRST)
 
-class FunctionInlinerPlugin(idaapi.plugin_t):
-    version = idaapi.IDP_INTERFACE_VERSION
-    flags = idaapi.PLUGIN_MOD | idaapi.PLUGIN_HIDE
+
+class FunctionInlinerPlugin(ida_idaapi.plugin_t):
+    version = ida_idp.IDP_INTERFACE_VERSION
+    flags = ida_idaapi.PLUGIN_MOD | ida_idaapi.PLUGIN_HIDE
 
     comment = "inlines functions that were outlined"
     help = ""
@@ -2512,7 +2515,7 @@ class FunctionInlinerPlugin(idaapi.plugin_t):
             logger.setLevel(logging.INFO)
 
     def is_compatible(self):
-        info = idaapi.get_inf_structure()
+        info = ida_idaapi.get_inf_structure()
         return info.procName == "ARM" and info.is_64bit()
 
     def init(self):
@@ -2526,7 +2529,7 @@ class FunctionInlinerPlugin(idaapi.plugin_t):
 
         if not self.is_compatible():
             logger.error("IDB deemed unsuitable (not an ARM64 binary). Skipping...")
-            return idaapi.PLUGIN_SKIP
+            return ida_idaapi.PLUGIN_SKIP
 
         for t in FunctionInlinerPlugin.ctx_actions_types:
             a = t(self)
@@ -2543,7 +2546,7 @@ class FunctionInlinerPlugin(idaapi.plugin_t):
 
         logger.info("initialized successfully")
 
-        return idaapi.PLUGIN_KEEP
+        return ida_idaapi.PLUGIN_KEEP
 
     def term(self):
         if self.hooks:
