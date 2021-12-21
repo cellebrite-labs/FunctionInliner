@@ -2467,12 +2467,18 @@ class FunctionInlinerHooks(idaapi.UI_Hooks):
         for action in self.menu_actions:
             idaapi.attach_action_to_menu(action.path, action.name, idaapi.SETMENU_APP)
 
-    def finish_populating_tform_popup(self, form, popup):
-        if idaapi.get_tform_type(form) in (idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE):
-            idaapi.attach_action_to_popup(form, popup, "-", None, idaapi.SETMENU_FIRST)
-            for action in reversed(self.ctx_actions):
-                idaapi.attach_action_to_popup(form, popup, action.name, None, idaapi.SETMENU_FIRST)
-
+    if idaapi.IDA_SDK_VERSION >= 700:
+        def finish_populating_widget_popup(self, form, popup):
+            if idaapi.get_widget_type(form) in (idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE):
+                idaapi.attach_action_to_popup(form, popup, "-", None, idaapi.SETMENU_FIRST)
+                for action in reversed(self.ctx_actions):
+                    idaapi.attach_action_to_popup(form, popup, action.name, None, idaapi.SETMENU_FIRST)
+    else:
+        def finish_populating_tform_popup(self, form, popup):
+            if idaapi.get_tform_type(form) in (idaapi.BWN_DISASM, idaapi.BWN_PSEUDOCODE):
+                idaapi.attach_action_to_popup(form, popup, "-", None, idaapi.SETMENU_FIRST)
+                for action in reversed(self.ctx_actions):
+                    idaapi.attach_action_to_popup(form, popup, action.name, None, idaapi.SETMENU_FIRST)
 
 class FunctionInlinerPlugin(idaapi.plugin_t):
     version = idaapi.IDP_INTERFACE_VERSION
