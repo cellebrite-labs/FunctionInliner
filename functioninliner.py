@@ -2395,6 +2395,10 @@ class FunctionInlinerInlineAction(FunctionInlinerActionBase):
     def label(self):
         return "Inline function"
 
+    @property
+    def shortcut(self):
+        return "Meta-P"
+
     def activate(self, ctx):
         func = get_function_under_cursor()
         inline_function(func)

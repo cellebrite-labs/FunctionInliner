@@ -73,7 +73,7 @@ Note: all of the context menus described below work both in IDA views and in Psu
 ### Inlining outlined functions
 
 Right-click on a `BL` to an outlined function, or on the beginning of an outlined function and
-choose `Inline function`.
+choose `Inline function` (or use the keyboard shortcut `Meta-P`, i.e. `Cmd/WinKey-P`).
 
 Note that the cloning logic does not support functions which consist of multiple function
 chunks. For such cases, you should dechunk the function manually, or have it done automatically by
