@@ -364,6 +364,12 @@ def get_branch_target_ea(line):
     return crefs_from.pop()
 
 
+def drefs_from_eas(line):
+    # IDA marks enum refs as drefs with top address byte set to 0xff, so we filter out
+    # drefs that are not actually mapped
+    return (ea for ea in line.drefs_from if ida_bytes.is_mapped(ea))
+
+
 # NETNODE
 
 
@@ -889,7 +895,7 @@ def clone_insn_branch(kp_asm, line, dst_ea, func, ret_ea):
 
 
 def clone_insn_mem(kp_asm, line, dst_ea):
-    drefs_from = set(line.drefs_from)
+    drefs_from = set(drefs_from_eas(line))
     insn = line.insn
 
     if len(drefs_from) == 1:
@@ -1048,9 +1054,7 @@ def clone_function(func, dst_ea, ret_ea=None, kp_asm=None):
                 else:
                     is_normal_flow = True  # all (at least one) flow code xrefs -> normal flow
 
-            if any(ida_bytes.is_mapped(ea) for ea in line.drefs_from):
-                # IDA marks enum refs as drefs with top address byte set to 0xff, so we test whether
-                # we have drefs for EAs that are actually mapped
+            if any(drefs_from_eas(line)):
                 has_drefs = True
             else:
                 has_drefs = False
@@ -2296,7 +2300,7 @@ def patch_constant_data_BLRs(kp_asm=None):
             continue
 
         # resolve the loaded addr
-        drefs_from = set(l2.drefs_from)
+        drefs_from = set(drefs_from_eas(l2))
         if len(drefs_from) == 1:
             p_target_ea = drefs_from.pop()
         else:  # this may happen with LDR when the target contains another address
