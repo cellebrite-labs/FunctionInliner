@@ -2529,7 +2529,7 @@ class FunctionInlinerPlugin(ida_idaapi.plugin_t):
 
     def is_compatible(self):
         info = ida_idaapi.get_inf_structure()
-        return info.procName == "ARM" and info.is_64bit()
+        return info.procname == "ARM" and info.is_64bit()
 
     def init(self):
         super().__init__()
