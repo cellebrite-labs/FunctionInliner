@@ -938,6 +938,10 @@ def clone_insn_mem(kp_asm, line, dst_ea):
         logger.trace(f"   ADRP -> translated to: {asm}")
         return code
 
+    elif full_mnem == "MOV":
+        logger.trace("   MOV -> copied as-is")
+        return line.bytes
+
     else:
         # we expect the rest to be e.g. LDR/STR/ADD using an address or a PAGEOFF
 
@@ -1041,6 +1045,7 @@ def clone_function(func, dst_ea, ret_ea=None, kp_asm=None):
 
             # generate some metadata about it
 
+            is_brk = line.insn.mnem == "BRK"
             is_ret = line.insn.mnem == "RET"
 
             is_normal_flow = False
@@ -1061,7 +1066,7 @@ def clone_function(func, dst_ea, ret_ea=None, kp_asm=None):
 
             # identify which kind of translation we should do
 
-            if (is_normal_flow and not has_drefs) or (is_ret and not ret_ea):  # "simple" instruction
+            if (is_normal_flow and not has_drefs) or (is_ret and not ret_ea) or is_brk:  # "simple" instruction
                 logger.trace("   'simple' instruction flow -> copied as-is")
                 code = line.bytes
 
