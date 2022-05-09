@@ -2515,7 +2515,7 @@ class FunctionInlinerPlugin(ida_idaapi.plugin_t):
         class TqdmHandler(logging.StreamHandler):
             def emit(self, record):
                 msg = self.format(record)
-                tqdm.tqdm.write(msg)
+                tqdm.tqdm.write(msg, nolock=True)
 
         logger_hdlr = TqdmHandler()
         logger_hdlr.setFormatter(logger_formatter)
