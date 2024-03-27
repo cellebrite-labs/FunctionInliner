@@ -620,16 +620,14 @@ def fix_outlined_function_call(src, clone_ea, clone_end_ea, func_ea, kp_asm=None
 
     # replace the source instruction with a B to our clone
     mnem = src.insn.mnem
-
     if mnem == "BL":
-        opcode = "B"  # BL -> B
+        asm = f"B #{clone_ea:#x}"  # we drop PAC flags
+        code = bytes(kp_asm.assemble(asm, src.ea)[0])
+        assert len(code) == src.size
+        ida_bytes.patch_bytes(src.ea, code)
     else:  # is_jump
-        opcode = src.disasm.split(" ", 1)[0]  # extract the original opcode (incl. conditions)
+        fix_cloned_branch(kp_asm, src.ea, func_ea, clone_ea)
 
-    asm = f"{opcode} #{clone_ea:#x}"  # we drop PAC flags
-    code = bytes(kp_asm.assemble(asm, src.ea)[0])
-    assert len(code) == src.size
-    ida_bytes.patch_bytes(src.ea, code)
     reanalyze_line(src)
 
     # delete the original xref
@@ -658,10 +656,10 @@ def inline_function_call(src, func, kp_asm=None):
 
     try:
         # analyze the caller
-        if src.insn.mnem == "BL":
-            ret_ea = src.end_ea
-        elif src.insn.mnem == "B":  # tail-call
+        if src.insn.mnem == "B" and not is_conditional_insn(src.insn):  # tail-call
             ret_ea = None
+        elif src.insn.mnem in ("B", "BL", "CBNZ", "CBZ", "TBNZ", "TBZ"):
+            ret_ea = src.end_ea
         else:
             raise FunctionInlinerException(f"unexpected call opcode: {src.insn.mnem}")
 
