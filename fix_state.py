@@ -1,4 +1,6 @@
 import idaapi
+import ida_frame
+import ida_funcs
 
 import sark
 import parse
@@ -186,5 +188,19 @@ for func_ea in storage.keys():
     f = sark.Function(func_ea)
     if list(functioninliner.external_callers(f)):
         functioninliner.inline_function(sark.Function(func_ea))
+
+# recalculate SP delta for all outlined chunks
+print("FIXING CLONE SP ANALYSIS")
+storage = functioninliner.ClonesStorage()
+
+for func_ea, clones in list(storage.items()):
+    for src_ea, clone_info in list(clones.items()):
+        clone_ea = clone_info.clone_ea
+        clone_end_ea = ida_funcs.get_fchunk(clone_ea).end_ea
+
+        pfn = ida_funcs.get_func(src_ea)
+        for ea in range(clone_ea, clone_end_ea, 4):
+            ida_frame.recalc_spd_for_basic_block(pfn, ea)
+
 
 idaapi.plan_and_wait(0, idaapi.BADADDR)

@@ -12,6 +12,7 @@ import types
 import ida_auto
 import ida_bytes
 import ida_funcs
+import ida_frame
 import ida_idaapi
 import ida_idp
 import ida_kernwin
@@ -633,6 +634,15 @@ def fix_outlined_function_call(src, clone_ea, clone_end_ea, func_ea, kp_asm=None
     # delete the original xref
     ida_xref.del_cref(src.ea, func_ea, 0)
 
+    # wait for analysis of the source instruction and the clone
+    assert ida_auto.auto_wait_range(src.ea, src.end_ea) >= 0
+    assert ida_auto.auto_wait_range(clone_ea, clone_end_ea) >= 0
+
+    # recalculate SP delta for the instructions in the clone. we do it for every instruction in
+    # case the clone contains more than one basic block
+    pfn = ida_funcs.get_func(src.ea)
+    for ea in range(clone_ea, clone_end_ea, 4):
+        ida_frame.recalc_spd_for_basic_block(pfn, ea)
 
 def inline_function_call(src, func, kp_asm=None):
     storage = ClonesStorage()
