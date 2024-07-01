@@ -215,3 +215,4 @@ plugin to cause this, so we didn't bother integrating the fixing logic into the 
 
 Authored by Tomer Harpaz of Cellebrite Security Research Labs.
 Developed and tested for IDA 7.6 on macOS with Python 3.7.9.
+Also tested on IDA up to 8.4
