@@ -923,10 +923,10 @@ def clone_insn_mem(kp_asm, line, dst_ea):
     # full_mnem should be the same as insn.mnem, but compare the full one just to be on the safe side
     full_mnem = ida_ua.print_insn_mnem(line.ea)
 
-    if full_mnem == "ADR":
+    if full_mnem in ("ADR", "ADRL"):
         # usually ADR is followed by NOP, because the compiler doesn't know if it'll be ADR or
-        # ADRP + ADD, but we don't want to rely on it so we'll replace the single ADR with two
-        # instructions
+        # ADRP + ADD (ADRL), but we don't want to rely on it so we'll translate both alternatives
+        # with two instructions
 
         reg = line.insn.regs.pop()
         asm = f"""
@@ -935,7 +935,7 @@ def clone_insn_mem(kp_asm, line, dst_ea):
         """
         code = bytes(kp_asm.assemble(asm, dst_ea)[0])
 
-        logger.trace(f"   ADR -> translated to: {asm}")
+        logger.trace(f"   {full_mnem} -> translated to: {asm}")
         return code
 
     elif full_mnem == "ADRP":
@@ -2540,8 +2540,6 @@ class FunctionInlinerPlugin(ida_idaapi.plugin_t):
         return info.procname == "ARM" and info.is_64bit()
 
     def init(self):
-        super().__init__()
-
         FunctionInlinerPlugin.init_logging()
 
         self.ctx_actions = []
