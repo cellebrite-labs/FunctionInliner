@@ -2465,6 +2465,21 @@ class FunctionInlinerInlineAllAction(FunctionInlinerActionBase):
         return ida_kernwin.AST_ENABLE_ALWAYS
 
 
+class FunctionInlinerInlineAllActionNoPreprocessing(FunctionInlinerActionBase):
+    @property
+    def label(self):
+        return "Inline all outlined functions (no preprocessing)"
+
+    def activate(self, ctx):
+        if not inline_all_functions():
+            return 1
+        reanalyze_program()
+        return 1
+
+    def update(self, ctx):
+        return ida_kernwin.AST_ENABLE_ALWAYS
+
+
 class FunctionInlinerPatchConstantBLRs(FunctionInlinerActionBase):
     @property
     def label(self):
@@ -2514,7 +2529,8 @@ class FunctionInlinerPlugin(ida_idaapi.plugin_t):
     wanted_hotkey = ""
 
     ctx_actions_types = (FunctionInlinerInlineAction, FunctionInlinerUndoInlineAction)
-    menu_actions_types = (FunctionInlinerPatchConstantBLRs, FunctionInlinerInlineAllAction)
+    menu_actions_types = (FunctionInlinerPatchConstantBLRs, FunctionInlinerInlineAllAction,
+                          FunctionInlinerInlineAllActionNoPreprocessing)
 
     @staticmethod
     def init_logging():
