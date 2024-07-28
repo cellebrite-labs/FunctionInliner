@@ -1707,6 +1707,12 @@ def is_function_prologue(line):
     if line.insn.mnem == "BTI" and line.insn.operands[0].text == "c":
         return True
 
+def is_function_stack_prologue(line):
+    """
+    we used to have this logic as part of is_function_prologue() but nowadays stack preparation
+    is often outlined as well, so we don't use it
+    """
+
     # expect stack space to be allocated
     insn = line.insn
     ops = insn.operands
