@@ -171,6 +171,27 @@ The heuristics we use are the following:
 5. The last two heuristics also hold for condition flags and not registers (i.e. if the function is
    using uninitializing/setting unused condition flags).
 
+### Inlining of extra functions
+
+In some IDBs with a huge amount of outlined functions, the amount of false-negatives can start
+getting high, and so we implemented extra heuristics that can match more outlined functions that
+do conform to the ABI.
+
+Note that this maybe reduce the amount of false-negatives but it comes with the cost of possible
+false-positives. Therefore, we only apply these heuristics on functions that haven't been
+eliminated by the previous heuristics (i.e. functions that do not have a prologue).
+
+The usage of these extra heuristics can be enabled from the plugin menu.
+
+With extra heuristics enabled, we also consider the following kinds of functions as outlined:
+1. Functions that use X1-X7 as return registers.
+   1. This is supported by the ABI, but isn't used by most binaries (i.e. a function that returns a
+      struct).
+1. Functions that do not set up a stack frame but still use stack variables.
+   1. This may be the case with a function that gets stack arguments but does not set up a stack
+      frame, but we expect it to be low-probability (i.e. a simple function with more than 8
+      arguments).
+
 ## Future improvements
 
 There are some cases of outlined functions that we currently don't auto detect with our heuristics:

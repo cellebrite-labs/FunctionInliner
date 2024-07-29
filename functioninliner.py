@@ -789,7 +789,7 @@ def inline_function(func, kp_asm=None):
 
 
 @with_autoanalysis(False)
-def inline_all_functions():
+def inline_all_functions(extra=False):
     logger.info("inlining all outlined functions...")
 
     failed_analysis = 0
@@ -810,7 +810,7 @@ def inline_all_functions():
 
             logger.debug(f"analyzing {func.name}")
             try:
-                if is_function_outlined(func):
+                if is_function_outlined(func, extra=extra):
                     outlined_funcs.append(func)
             except Exception:
                 logger.exception(f"unhandled exception raised when trying to analyze {func.name}:")
@@ -1967,13 +1967,14 @@ def is_function_using_uninitialized_regs(func):
     return False
 
 
-def is_function_affecting_non_result_regs(func):
+def is_function_affecting_non_result_regs(func, *, allow_multiple_result_registers=True):
     logger.trace(f"analyzing {func.name} for non-result-registers effects")
 
     # these special regs can also be affected in the function epilogue
     result_regs = set(("SP", "X29", "X30", "LR", "WZR", "XZR"))
 
-    for i in range(8):
+    n = 8 if allow_multiple_result_registers else 1
+    for i in range(n):
         result_regs.add(f"W{i}")
         result_regs.add(f"X{i}")
 
@@ -2085,7 +2086,43 @@ def is_function_affecting_non_result_regs(func):
     return False
 
 
-def is_function_outlined(func, include_inlined=False):
+def is_function_using_uninitialized_stack(func, stack_args_size=0):
+    """
+    note these accesses
+    """
+
+    logger.trace(f"analyzing {func.name} for stack accesses outside the stack frame")
+
+    size = ida_frame.get_frame_size(func._func) + stack_args_size
+    logger.trace(f"   frame size: {size:#x}")
+
+    try:
+        for l in code_flow_iterator(sark.Line(func.start_ea), ignore_aborts=True):
+            logger.trace(f"-> {l.disasm}")
+
+            insn = l.insn
+
+            if not insn.has_reg("SP"):
+                continue
+
+            for i in range(len(insn.operands)):
+                off = ida_frame.calc_stkvar_struc_offset(func._func, insn._insn, i)
+
+                if off == ida_idaapi.BADADDR:
+                    continue
+
+                if off > size:
+                    logger.trace(f"   accessed stack frame at offset {off:#x} -> out of bounds")
+                    return True
+                else:
+                    logger.trace(f"   accessed stack frame at offset {off:#x}")
+    except FunctionInlinerUnknownFlowException:
+        logger.trace("aborting because code flow cannot be followed any longer...")
+
+    return False
+
+
+def is_function_outlined(func, *, include_inlined=False, extra=False):
     if include_inlined:
         if func.ea in ClonesStorage().items:
             return True
@@ -2101,7 +2138,21 @@ def is_function_outlined(func, include_inlined=False):
     if is_function_using_uninitialized_regs(func):
         return True
 
-    if is_function_affecting_non_result_regs(func):
+    # most programs don't really return structs from functions, if "extra" is set, we will assume
+    # that X1-X7 aren't really used as return registers
+    if is_function_affecting_non_result_regs(func, allow_multiple_result_registers=not extra):
+        return True
+
+    if not extra:
+        return False
+
+    # this is under "extra" since we don't know how many args func gets so we can't really say
+    # if a stack access is out-of-bounds or not
+    #
+    # however, we assume that a function with more than 8 arguments will have a proper prologue
+    # or stack frame set up
+    if (not is_function_stack_prologue(sark.Line(func.ea))
+        and is_function_using_uninitialized_stack(func)):
         return True
 
     return False
@@ -2399,6 +2450,10 @@ class FunctionInlinerActionBase(ida_kernwin.action_handler_t):
         return 0
 
     @property
+    def menu_flags(self):
+        return 0
+
+    @property
     def path(self):
         return f"Edit/Plugins/{self.plugin.wanted_name}/"
 
@@ -2410,6 +2465,7 @@ class FunctionInlinerActionBase(ida_kernwin.action_handler_t):
             self.shortcut,
             self.tooltip,
             self.icon,
+            self.flags
         )
         ida_kernwin.register_action(desc)
 
@@ -2467,12 +2523,16 @@ class FunctionInlinerInlineAllAction(FunctionInlinerActionBase):
     def label(self):
         return "Inline all outlined functions"
 
+    @property
+    def menu_flags(self):
+        return ida_kernwin.SETMENU_ENSURE_SEP
+
     def activate(self, ctx):
         if not explore_idb():
             return 1
         if not preprocess_idb():
             return 1
-        if not inline_all_functions():
+        if not inline_all_functions(extra=self.plugin.inline_extra):
             return 1
         reanalyze_program()
         return 1
@@ -2487,9 +2547,39 @@ class FunctionInlinerInlineAllActionNoPreprocessing(FunctionInlinerActionBase):
         return "Inline all outlined functions (no preprocessing)"
 
     def activate(self, ctx):
-        if not inline_all_functions():
+        if not inline_all_functions(extra=self.plugin.inline_extra):
             return 1
         reanalyze_program()
+        return 1
+
+    def update(self, ctx):
+        return ida_kernwin.AST_ENABLE_ALWAYS
+
+
+class FunctionInlinerToggleExtra(FunctionInlinerActionBase):
+    @property
+    def label(self):
+        return "Toggle inlining of extra functions"
+
+    @property
+    def flags(self):
+        flags = ida_kernwin.ADF_CHECKABLE
+
+        if self.plugin.inline_extra:
+            flags |= ida_kernwin.ADF_CHECKED
+
+        return flags
+
+    @property
+    def menu_flags(self):
+        return ida_kernwin.SETMENU_ENSURE_SEP
+
+    @property
+    def icon(self):
+        return 0
+
+    def activate(self, ctx):
+        self.plugin.inline_extra = ida_kernwin.get_action_checked(self.name)[1]
         return 1
 
     def update(self, ctx):
@@ -2500,6 +2590,10 @@ class FunctionInlinerPatchConstantBLRs(FunctionInlinerActionBase):
     @property
     def label(self):
         return "Patch constant register-based calls to regular calls"
+
+    @property
+    def icon(self):
+        return 0
 
     def activate(self, ctx):
         if not explore_idb():
@@ -2526,13 +2620,17 @@ class FunctionInlinerHooks(ida_kernwin.UI_Hooks):
 
     def ready_to_run(self):
         for action in self.menu_actions:
-            ida_kernwin.attach_action_to_menu(action.path, action.name, ida_kernwin.SETMENU_APP)
+            ida_kernwin.attach_action_to_menu(
+                action.path, action.name, ida_kernwin.SETMENU_APP | action.menu_flags
+            )
 
     def finish_populating_widget_popup(self, form, popup):
         if ida_kernwin.get_widget_type(form) in (ida_kernwin.BWN_DISASM, ida_kernwin.BWN_PSEUDOCODE):
             ida_kernwin.attach_action_to_popup(form, popup, "-", None, ida_kernwin.SETMENU_FIRST)
             for action in reversed(self.ctx_actions):
-                ida_kernwin.attach_action_to_popup(form, popup, action.name, None, ida_kernwin.SETMENU_FIRST)
+                ida_kernwin.attach_action_to_popup(
+                    form, popup, action.name, None, ida_kernwin.SETMENU_FIRST | action.menu_flags
+                )
 
 
 class FunctionInlinerPlugin(ida_idaapi.plugin_t):
@@ -2545,8 +2643,12 @@ class FunctionInlinerPlugin(ida_idaapi.plugin_t):
     wanted_hotkey = ""
 
     ctx_actions_types = (FunctionInlinerInlineAction, FunctionInlinerUndoInlineAction)
-    menu_actions_types = (FunctionInlinerPatchConstantBLRs, FunctionInlinerInlineAllAction,
-                          FunctionInlinerInlineAllActionNoPreprocessing)
+    menu_actions_types = (
+        FunctionInlinerPatchConstantBLRs, FunctionInlinerInlineAllAction,
+        FunctionInlinerInlineAllActionNoPreprocessing,FunctionInlinerToggleExtra
+    )
+
+    NETNODE = "$ FunctionInliner.plugin"
 
     @staticmethod
     def init_logging():
@@ -2573,6 +2675,8 @@ class FunctionInlinerPlugin(ida_idaapi.plugin_t):
 
     def init(self):
         FunctionInlinerPlugin.init_logging()
+
+        self._netnode = netnode.Netnode(self.NETNODE)
 
         self.ctx_actions = []
         self.menu_actions = []
@@ -2611,6 +2715,14 @@ class FunctionInlinerPlugin(ida_idaapi.plugin_t):
 
     def run(self, arg=0):
         pass
+
+    @property
+    def inline_extra(self):
+        return bool(self._netnode.get("inline_extra"))
+
+    @inline_extra.setter
+    def inline_extra(self, value: bool):
+        self._netnode["inline_extra"] = value
 
 
 def PLUGIN_ENTRY():
