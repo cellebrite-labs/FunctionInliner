@@ -1,6 +1,7 @@
 import idaapi
 import ida_frame
 import ida_funcs
+import ida_bytes
 
 import sark
 import parse
@@ -20,7 +21,7 @@ ea = idaapi.next_unknown(0, idaapi.BADADDR)
 while ea != idaapi.BADADDR:
     if not has_segment(ea):
         print(f"disabling address {ea:#x}")
-        idaapi.disable_flags(ea, ea + 4)
+        idaapi.disable_flags(ea, ea + ida_bytes.get_item_size(ea))
     ea = idaapi.next_unknown(ea, idaapi.BADADDR)
 
 # look for dangling clones metadata and:
@@ -37,18 +38,19 @@ def get_original_bytes(start_ea, size):
 
 
 def revert_patched_BL(src_ea, original_bytes=None):
+    size = ida_bytes.get_item_size(src_ea)
     if original_bytes is None:
-        original_bytes = get_original_bytes(src_ea, 4)
+        original_bytes = get_original_bytes(src_ea, size)
         if original_bytes == b"\xff\xff\xff\xff":
             print(f"cannot revert patch @ {src_ea:#x}!")
             return
     else:
-        assert len(original_bytes) == 4
+        assert len(original_bytes) == size
 
     print(f"reverting patch @ {src_ea:#x}")
     idaapi.patch_bytes(src_ea, original_bytes)
 
-    idaapi.plan_and_wait(src_ea, src_ea + 4)
+    idaapi.plan_and_wait(src_ea, src_ea + size)
 
     try:
         src_func = sark.Function(src_ea)
@@ -199,8 +201,10 @@ for func_ea, clones in list(storage.items()):
         clone_end_ea = ida_funcs.get_fchunk(clone_ea).end_ea
 
         pfn = ida_funcs.get_func(src_ea)
-        for ea in range(clone_ea, clone_end_ea, 4):
+        ea = clone_ea
+        while ea < clone_end_ea:
             ida_frame.recalc_spd_for_basic_block(pfn, ea)
+            ea += ida_bytes.get_item_size(ea)
 
 
 idaapi.plan_and_wait(0, idaapi.BADADDR)

@@ -483,7 +483,7 @@ class ClonesStorage(collections.UserDict, metaclass=SingletonUserDict):
                            "a defaultdict")
 
     def __delitem__(self, func_ea):
-        for src_ea, _ in self[func_ea]:
+        for src_ea, _ in self[func_ea].items():
             key = ClonesStorage.storage_key(func_ea, src_ea)
             del self.netnode[key]
 
@@ -641,8 +641,10 @@ def fix_outlined_function_call(src, clone_ea, clone_end_ea, func_ea, kp_asm=None
     # recalculate SP delta for the instructions in the clone. we do it for every instruction in
     # case the clone contains more than one basic block
     pfn = ida_funcs.get_func(src.ea)
-    for ea in range(clone_ea, clone_end_ea, 4):
+    ea = clone_ea
+    while ea < clone_end_ea:
         ida_frame.recalc_spd_for_basic_block(pfn, ea)
+        ea += ida_bytes.get_item_size(ea)
 
 def inline_function_call(src, func, kp_asm=None):
     storage = ClonesStorage()
@@ -1246,7 +1248,7 @@ def fix_function_noret_flags():
                 continue
 
             logger.debug(f"  making function failed because of undefined instruction @ {fn.end_ea:#x}")
-            tail_call = sark.Line(fn.end_ea - 4)
+            tail_call = sark.Line(fn.end_ea - 1)
 
             # we expect that to be because the last insn was a BL to a NORET function which isn't
             # marked as such
@@ -1612,7 +1614,7 @@ def code_flow_iterator(line, forward=True, stop=None, abort_on_calls=True, dfs=F
     func = sark.Function(line)
     if stop is None:
         if forward:
-            stop = sark.Line(func.end_ea - 4)
+            stop = sark.Line(func.end_ea - 1)
         else:
             stop = sark.Line(func.start_ea)
 
