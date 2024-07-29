@@ -1607,7 +1607,7 @@ def preprocess_idb():
 
 
 def code_flow_iterator(line, forward=True, stop=None, abort_on_calls=True, dfs=False,
-                       _visited_eas=None):
+                       ignore_aborts=False, _visited_eas=None):
 
     func = sark.Function(line)
     if stop is None:
@@ -1648,6 +1648,9 @@ def code_flow_iterator(line, forward=True, stop=None, abort_on_calls=True, dfs=F
         if len(crefs) == 0:
             break
 
+        if len(crefs) > 1 and ignore_aborts:
+            crefs = [x for x in crefs if sark.Line(x).insn.mnem != "BRK"]
+
         if len(crefs) > 1:
             if not dfs:
                 raise FunctionInlinerUnknownFlowException()
@@ -1659,6 +1662,7 @@ def code_flow_iterator(line, forward=True, stop=None, abort_on_calls=True, dfs=F
                     forward=forward,
                     abort_on_calls=abort_on_calls,
                     dfs=dfs,
+                    ignore_aborts=ignore_aborts,
                     _visited_eas=_visited_eas)
 
             crefs = crefs[-1:]
@@ -1666,7 +1670,7 @@ def code_flow_iterator(line, forward=True, stop=None, abort_on_calls=True, dfs=F
         line = sark.Line(crefs[0])
 
 
-def find_function_ends(func):
+def find_function_ends(func, ignore_aborts=False):
     def is_internal(ea):
         return ida_funcs.func_contains(func._func, ea)
 
@@ -1676,6 +1680,10 @@ def find_function_ends(func):
         while ea not in visited:
             visited.add(ea)
             next_eas = [next_ea for next_ea in sark.Line(ea).crefs_from if is_internal(next_ea)]
+
+            # ignore aborts if asked to
+            if ignore_aborts and sark.Line(ea).insn.mnem == "BRK":
+                break
 
             # handle ret/tail-call
             if len(next_eas) == 0:
@@ -1706,6 +1714,8 @@ def is_function_prologue(line):
     # check for BTI (relevant only ARMv8.5 code which uses it)
     if line.insn.mnem == "BTI" and line.insn.operands[0].text == "c":
         return True
+
+    return False
 
 def is_function_stack_prologue(line):
     """
@@ -1852,7 +1862,7 @@ def is_function_using_uninitialized_regs(func):
 
     # look for uninitialized reg reads
     try:
-        for l in code_flow_iterator(sark.Line(func.start_ea)):
+        for l in code_flow_iterator(sark.Line(func.start_ea), ignore_aborts=True):
             logger.trace(f"-> {l.disasm}")
 
             # regs that we'll treat as initialized once done with this instruction
@@ -1930,7 +1940,7 @@ def is_function_using_uninitialized_regs(func):
 
     # we don't have to wrap this code_flow_iterator with try-except, since if the forward-pass
     # didn't find any basic blocks, the backwards pass surely won't
-    for l in code_flow_iterator(func_ends[0], forward=False):
+    for l in code_flow_iterator(func_ends[0], forward=False, ignore_aborts=True):
         logger.trace(f"-> {l.disasm}")
 
         insn = l.insn
@@ -1978,14 +1988,14 @@ def is_function_affecting_non_result_regs(func):
     # some functions have multiple ends. in case one of them points to a noret function,
     # we may be in the midst of a function, and see internally registers being used, so we'll just
     # skip this validation
-    func_ends = list(find_function_ends(func))
+    func_ends = list(find_function_ends(func, ignore_aborts=True))
     if len(func_ends) > 1:
         logger.trace("aborting because more than one function end was found...")
         return False
 
     # look for "useless" writes into non-result regs
     try:
-        for l in code_flow_iterator(func_ends[0], forward=False):
+        for l in code_flow_iterator(func_ends[0], forward=False, ignore_aborts=True):
             logger.trace(f"-> {l.disasm}")
 
             # regs that we'll treat as result regs once done with this instruction
@@ -2045,7 +2055,7 @@ def is_function_affecting_non_result_regs(func):
     logger.trace("finished backwards pass ; starting forward pass")
 
     try:
-        for l in code_flow_iterator(sark.Line(func.start_ea)):
+        for l in code_flow_iterator(sark.Line(func.start_ea), ignore_aborts=True):
             logger.trace(f"-> {l.disasm}")
 
             insn = l.insn
