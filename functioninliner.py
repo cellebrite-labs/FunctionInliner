@@ -425,11 +425,11 @@ class ClonesStorage(collections.UserDict, metaclass=SingletonUserDict):
             if not isinstance(clone, ClonesStorage.CloneInfo):
                 raise ValueError("value must be of type ClonesStorage.CloneInfo")
             self.data[src_ea] = clone
-            self._update_callback(src_ea)
+            self._update_callback(self, src_ea)
 
         def __delitem__(self, src_ea):
             del self.data[src_ea]
-            self._update_callback(src_ea)
+            self._update_callback(self, src_ea)
 
     def __init__(self):
         super().__init__()
@@ -457,17 +457,18 @@ class ClonesStorage(collections.UserDict, metaclass=SingletonUserDict):
     def parse_storage_key(k):
         return parse.parse(CLONE_NAME_FMT, k)
 
-    def write_to_storage(self, func_ea, src_ea):
+    def write_to_storage(self, func_ea, func_storage, src_ea):
         key = ClonesStorage.storage_key(func_ea, src_ea)
-        clone_info = self.data[func_ea].get(src_ea, None)
+        clone_info = func_storage.get(src_ea, None)
         if clone_info is None:  # delete
             del self.netnode[key]
 
             # if there are no more outlined
-            if not self.data[func_ea]:
+            if not func_storage and func_ea in self.data:
                 del self.data[func_ea]
         else:  # set
             self.netnode[key] = tuple(clone_info)
+            self.data[func_ea] = func_storage
 
     def __getitem__(self, func_ea):
         if func_ea in self.data:
@@ -475,7 +476,6 @@ class ClonesStorage(collections.UserDict, metaclass=SingletonUserDict):
         else:
             update_callback = functools.partial(self.write_to_storage, func_ea)
             func_storage = ClonesStorage.InlinedFunctionInfo(update_callback)
-            self.data[func_ea] = func_storage
             return func_storage
 
     def __setitem__(self, k, v):
@@ -487,7 +487,8 @@ class ClonesStorage(collections.UserDict, metaclass=SingletonUserDict):
             key = ClonesStorage.storage_key(func_ea, src_ea)
             del self.netnode[key]
 
-        del self.data[func_ea]
+        if func_ea in self.data:
+            del self.data[func_ea]
 
 
 # FUNCTION INLINING
