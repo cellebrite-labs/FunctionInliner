@@ -437,6 +437,8 @@ class ClonesStorage(collections.UserDict, metaclass=SingletonUserDict):
         self.update_from_storage()
 
     def update_from_storage(self):
+        self.data.clear()
+
         for k, v in self.netnode.items():
             parts = ClonesStorage.parse_storage_key(k)
             if not parts:
