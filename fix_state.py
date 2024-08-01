@@ -120,12 +120,12 @@ for func_ea, clones in list(storage.items()):
 print("REMOVING DANGLING CLONES")
 
 
-def find_clone_info(clone_ea):
-    storage = functioninliner.ClonesStorage()
-    for func_ea, clones in storage.items():
-        for src_ea, clone_info in clones.items():
-            if clone_info.clone_ea == clone_ea:
-                return (func_ea, src_ea, clone_info)
+clone_ea_to_clone_info = {}
+storage = functioninliner.ClonesStorage()
+for func_ea, clones in storage.items():
+    for src_ea, clone_info in clones.items():
+        assert clone_info.clone_ea not in clone_ea_to_clone_info
+        clone_ea_to_clone_info[clone_info.clone_ea] = (func_ea, src_ea, clone_info)
 
 
 for seg in list(sark.segments()):
@@ -134,7 +134,7 @@ for seg in list(sark.segments()):
 
     clone_ea = seg.ea
 
-    if find_clone_info(clone_ea):
+    if clone_ea in clone_ea_to_clone_info:
         continue
 
     parts = parse.parse(functioninliner.CLONE_NAME_FMT, seg.name)
@@ -206,5 +206,8 @@ for func_ea, clones in list(storage.items()):
             ida_frame.recalc_spd_for_basic_block(pfn, ea)
             ea += ida_bytes.get_item_size(ea)
 
-
+# reanalyze program
+print("REANALYZING")
 idaapi.plan_and_wait(0, idaapi.BADADDR)
+
+print("DONE!")
