@@ -206,6 +206,48 @@ for func_ea, clones in list(storage.items()):
             ida_frame.recalc_spd_for_basic_block(pfn, ea)
             ea += ida_bytes.get_item_size(ea)
 
+# fix noncoherent entries in the renames storage
+print("FIXING RENAMES STORAGE")
+storage = functioninliner.ClonesStorage()
+rstorage = functioninliner.RenamesStorage()
+
+for func_ea in storage.keys():
+    rename_info = rstorage.get(func_ea)
+
+    func = sark.Function(func_ea)
+    assert func.start_ea == func_ea
+
+    if rename_info and func.name == rename_info.new_name:
+        continue
+
+    if rename_info:
+        print(f"function name for {ea:#x} is {func.name}. renaming to {rename_info.new_name}")
+        func.name = rename_info.new_name
+    else:
+        orig_name = func.name.lstrip("outlined_")
+        rename_info = rstorage.RenameInfo(orig_name, func.name)
+        rstorage[func.ea] = rename_info
+
+        print(f"rename info for {ea:#x} is missing. setting to orig={orig_name} new={func.name}")
+
+for func_ea, rename_info in list(rstorage.items()):
+    if func_ea in storage:
+        continue
+
+    print(f"found rename info for non-inlined function {func_ea:#x}")
+
+    func = sark.Function(func_ea)
+    if func.start_ea != func_ea:
+        print("\twhich isn't even a function start")
+    elif func.name == rename_info.new_name:
+        print(f"\tand renaming back to {rename_info.orig_name}")
+        func.name = rename_info.orig_name
+    else:
+        print(f"\tcurrent name is: {func.name} which differs from new: {rename_info.new_name}. "
+              f"not renaming back to orig: {rename_info.orig_name}")
+
+    del rstorage[func_ea]
+
 # reanalyze program
 print("REANALYZING")
 idaapi.plan_and_wait(0, idaapi.BADADDR)
